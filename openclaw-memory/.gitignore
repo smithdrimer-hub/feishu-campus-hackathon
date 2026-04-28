@@ -1,0 +1,8 @@
+.test-tmp/
+__pycache__/
+*.pyc
+data/raw_events.jsonl
+data/memory_state.json
+data/example_run/
+config.local.yaml
+.env

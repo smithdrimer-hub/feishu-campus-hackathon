@@ -1,0 +1,6 @@
+{"project_id":"openclaw-memory-demo","chat_id":"oc_example_handoff_01","message_id":"om_example_01","text":"今天中午吃什么？我想点咖啡。","created_at":"2026-04-25T10:02:00+08:00","sender":{"name":"A"}}
+{"project_id":"openclaw-memory-demo","chat_id":"oc_example_handoff_01","message_id":"om_example_02","text":"负责人先从 B 调整为 C，C 负责 V1.1 可信提取模块。","created_at":"2026-04-25T10:04:00+08:00","sender":{"name":"A"}}
+{"project_id":"openclaw-memory-demo","chat_id":"oc_example_handoff_01","message_id":"om_example_03","text":"关键决策：V1.1 采用 LLM 结构化提取 + schema 校验 + 规则兜底。","created_at":"2026-04-25T10:06:00+08:00","sender":{"name":"B"}}
+{"project_id":"openclaw-memory-demo","chat_id":"oc_example_handoff_01","message_id":"om_example_04","text":"暂缓事项：真实写入执行和 UI 都先不做，避免污染飞书环境。","created_at":"2026-04-25T10:08:00+08:00","sender":{"name":"C"}}
+{"project_id":"openclaw-memory-demo","chat_id":"oc_example_handoff_01","message_id":"om_example_05","text":"阻塞/风险：docs +create --dry-run 之前实际创建过文档，不能拿它当保护机制。","created_at":"2026-04-25T10:10:00+08:00","sender":{"name":"C"}}
+{"project_id":"openclaw-memory-demo","chat_id":"oc_example_handoff_01","message_id":"om_example_06","text":"下一步：C 补上合法/非法 LLM 输出、无证据锚点不能写入的测试。","created_at":"2026-04-25T10:12:00+08:00","sender":{"name":"A"}}
