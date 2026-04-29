@@ -13,9 +13,24 @@ from typing import Any, Iterable
 from memory.schema import MemoryItem
 
 
+def _resolve_owner(
+    owner_name: str | None,
+    owner_map: dict[str, str] | None,
+) -> str:
+    """将 owner 姓名解析为 user_id。
+
+    如果 owner_map 存在且包含该姓名，返回对应的 open_id；
+    否则返回原姓名。
+    """
+    if owner_name and owner_map and owner_name in owner_map:
+        return owner_map[owner_name]
+    return owner_name or ""
+
+
 def build_group_project_state(
     project_id: str,
     items: Iterable[MemoryItem],
+    owner_map: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """从 Memory 中聚合项目状态，返回结构化字典。
 
@@ -51,10 +66,11 @@ def build_group_project_state(
     seen_owners: set[str] = set()
     owners_list: list[dict[str, str]] = []
     for item in by_type.get("owner", []):
-        if item.owner and item.owner not in seen_owners:
-            seen_owners.add(item.owner)
+        resolved = _resolve_owner(item.owner, owner_map)
+        if resolved and resolved not in seen_owners:
+            seen_owners.add(resolved)
             owners_list.append({
-                "user_id": item.owner,
+                "user_id": resolved,
                 "role": item.state_type,
             })
 
@@ -81,10 +97,11 @@ def build_group_project_state(
     # Active tasks：next_step 或有 owner 的记忆
     active_tasks: list[dict[str, Any]] = []
     for item in by_type.get("next_step", []):
+        resolved = _resolve_owner(item.owner, owner_map)
         active_tasks.append({
             "id": item.memory_id,
             "title": item.current_value[:120],
-            "assignees": [item.owner] if item.owner else [],
+            "assignees": [resolved] if resolved else [],
             "status": "in_progress" if item.status == "active" else item.status,
         })
 
@@ -100,10 +117,11 @@ def build_group_project_state(
     # Next actions with owner
     next_actions: list[dict[str, Any]] = []
     for item in by_type.get("next_step", []):
-        if item.owner:
+        resolved = _resolve_owner(item.owner, owner_map)
+        if resolved:
             next_actions.append({
                 "title": item.current_value[:120],
-                "owner": item.owner,
+                "owner": resolved,
             })
 
     # 找到最近更新时间
@@ -206,6 +224,305 @@ def render_group_state_panel_text(state: dict[str, Any]) -> str:
     # 无任何数据时的降级
     if not any([owners, recent, open_d, tasks, risks, next_acts]):
         lines.append("当前项目暂无提取到的结构化记忆。请先同步飞书消息或文档后再试。")
+        lines.append("")
+
+    return "\n".join(lines).strip() + "\n"
+
+
+def build_agent_context_pack(
+    project_id: str,
+    items: Iterable[MemoryItem],
+    user_id: str | None = None,
+    max_items_per_section: int = 20,
+    owner_map: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """构造给其他 Agent 使用的上下文包（Dev Spec 形态 C）。
+
+    输出为结构化 JSON，不做自然语言渲染，便于其他进程/Agent 消费。
+
+    聚合逻辑：
+    - project：项目元信息
+    - decisions：唯一的最新有效决策（已自动处理 supersedes）
+    - tasks：当前活跃任务
+    - risks：当前阻塞与风险
+    - recent_discussion_snippets：关联消息摘要
+    - user_perspective：如果给了 user_id，附加该用户视角
+
+    Args:
+        project_id: 项目 ID
+        items: 当前 active memory items
+        user_id: 可选，附加指定用户的个人上下文
+        max_items_per_section: 每类最多返回多少条
+
+    Returns:
+        Dev Spec 5.2 格式的结构化字典
+    """
+    items_list = list(items)
+    by_type: dict[str, list[MemoryItem]] = defaultdict(list)
+    for item in items_list:
+        if item.project_id == project_id:
+            by_type[item.state_type].append(item)
+
+    # Project metadata
+    goals = by_type.get("project_goal", [])
+    project_title = goals[0].current_value[:80] if goals else f"项目 {project_id}"
+    project_description = goals[0].rationale if goals else "暂无描述"
+
+    # Decisions：唯一且最新的有效决策（处理 supersedes）
+    # 相同 key 的决策只保留最新版本
+    decisions: list[dict[str, Any]] = []
+    seen_keys: set[str] = set()
+    for item in sorted(by_type.get("decision", []), key=lambda x: x.version, reverse=True):
+        if item.key in seen_keys:
+            continue
+        if len(decisions) >= max_items_per_section:
+            break
+        seen_keys.add(item.key)
+        decisions.append({
+            "id": item.memory_id,
+            "title": item.current_value[:120],
+            "status": "confirmed",
+            "decided_at": item.updated_at,
+            "supersedes": item.supersedes,
+            "raw_snippets": [
+                {
+                    "chat_id": ref.chat_id,
+                    "message_id": ref.message_id,
+                    "text": ref.excerpt,
+                }
+                for ref in item.source_refs
+            ],
+        })
+
+    # Tasks
+    tasks: list[dict[str, Any]] = []
+    for item in by_type.get("next_step", [])[:max_items_per_section]:
+        resolved = _resolve_owner(item.owner, owner_map)
+        tasks.append({
+            "id": item.memory_id,
+            "title": item.current_value[:120],
+            "status": "in_progress" if item.status == "active" else item.status,
+            "assignees": [resolved] if resolved else [],
+        })
+
+    # Risks
+    risks: list[dict[str, Any]] = []
+    for item in by_type.get("blocker", [])[:max_items_per_section]:
+        risks.append({
+            "id": item.memory_id,
+            "description": item.current_value[:200],
+            "severity": "high" if "严重" in item.current_value else "medium",
+        })
+
+    # Recent discussion snippets：从有 source_refs 的记忆中提取
+    snippets: list[dict[str, Any]] = []
+    for item in items_list[:max_items_per_section]:
+        for ref in item.source_refs:
+            snippets.append({
+                "chat_id": ref.chat_id,
+                "message_id": ref.message_id,
+                "text": ref.excerpt,
+                "sent_at": ref.created_at,
+            })
+
+    result: dict[str, Any] = {
+        "project": {
+            "project_id": project_id,
+            "title": project_title,
+            "description": project_description,
+        },
+        "decisions": decisions,
+        "tasks": tasks,
+        "risks": risks,
+        "recent_discussion_snippets": snippets,
+    }
+
+    # User perspective（可选）
+    if user_id:
+        user_tasks = [t for t in tasks if t["assignees"] and user_id in t["assignees"]]
+        result["user_perspective"] = {
+            "user_id": user_id,
+            "open_tasks": user_tasks[:max_items_per_section],
+        }
+
+    return result
+
+
+def _enrich_snippets(
+    snippets: list[dict[str, Any]],
+    raw_events_path: str | None,
+) -> list[dict[str, Any]]:
+    """从 raw_events.jsonl 按 message_id 回读完整原文，替换 excerpt。
+
+    纯只读操作。文件不存在或不传参数时返回原样。
+
+    Args:
+        snippets: raw_snippets 列表，每个包含 message_id
+        raw_events_path: raw_events.jsonl 的文件路径，可选
+
+    Returns:
+        更新后的 snippets 列表（text 字段变为完整原文）
+    """
+    if not raw_events_path:
+        return snippets
+
+    import json
+    from pathlib import Path
+
+    path = Path(raw_events_path)
+    if not path.exists():
+        return snippets
+
+    # 构建 message_id → 原文 的映射
+    text_map: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+            mid = event.get("message_id", "")
+            raw_text = event.get("text") or event.get("content") or ""
+            if mid and raw_text:
+                # 只保留第一次出现的原文（最早的消息）
+                if mid not in text_map:
+                    text_map[mid] = raw_text
+        except json.JSONDecodeError:
+            continue
+
+    # 用完整原文替换 excerpt
+    enriched = []
+    for s in snippets:
+        mid = s.get("message_id", "")
+        if mid in text_map:
+            s["text"] = text_map[mid][:2000]  # 限制 2000 字
+        enriched.append(s)
+
+    return enriched
+
+
+def build_personal_work_context(
+    user_id: str,
+    project_id: str,
+    items: Iterable[MemoryItem],
+    owner_map: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """聚合某个用户在项目中的个人工作上下文（Dev Spec 形态 B）。
+
+    按 user_id（可以是姓名或 open_id）过滤出该用户相关的记忆：
+    - my_open_tasks：owner 为该用户的 next_step
+    - my_recent_decisions_involved：owner 为该用户的 decision
+    - my_related_risks：owner 为该用户的 blocker
+    - suggested_next_actions：owner 为该用户的 next_step
+
+    Args:
+        user_id: 用户标识（姓名或 open_id，取决于 owner_map）
+        project_id: 项目 ID
+        items: 当前 active memory items
+        owner_map: 可选，{姓名: open_id} 映射，用于解析 owner
+
+    Returns:
+        Dev Spec 4.2 格式的结构化字典
+    """
+    items_list = list(items)
+    by_type: dict[str, list[MemoryItem]] = defaultdict(list)
+    for item in items_list:
+        if item.project_id == project_id:
+            by_type[item.state_type].append(item)
+
+    def _match_owner(item: MemoryItem) -> bool:
+        resolved = _resolve_owner(item.owner, owner_map)
+        return resolved == user_id
+
+    # Open tasks
+    open_tasks: list[dict[str, Any]] = []
+    for item in by_type.get("next_step", []):
+        if _match_owner(item):
+            open_tasks.append({
+                "id": item.memory_id,
+                "title": item.current_value[:120],
+                "status": "in_progress" if item.status == "active" else item.status,
+            })
+
+    # Decisions involved
+    decisions_involved: list[dict[str, Any]] = []
+    for item in by_type.get("decision", []):
+        if _match_owner(item):
+            decisions_involved.append({
+                "id": item.memory_id,
+                "title": item.current_value[:120],
+                "role": "participant",
+                "decided_at": item.updated_at,
+            })
+
+    # Related risks
+    related_risks: list[dict[str, Any]] = []
+    for item in by_type.get("blocker", []):
+        if _match_owner(item):
+            related_risks.append({
+                "id": item.memory_id,
+                "description": item.current_value[:200],
+            })
+
+    # Suggested next actions
+    suggested_next: list[dict[str, Any]] = []
+    for item in by_type.get("next_step", []):
+        if _match_owner(item):
+            suggested_next.append({
+                "title": item.current_value[:120],
+            })
+
+    return {
+        "user_id": user_id,
+        "project_id": project_id,
+        "my_open_tasks": open_tasks,
+        "my_recent_decisions_involved": decisions_involved,
+        "my_related_risks": related_risks,
+        "suggested_next_actions": suggested_next,
+    }
+
+
+def render_personal_context_text(ctx: dict[str, Any]) -> str:
+    """把 build_personal_work_context 的结果渲染为可发给用户的 Markdown 文本。
+
+    无数据时显示友好的降级文案。
+    """
+    lines: list[str] = []
+    user_id = ctx.get("user_id", "")
+    project_id = ctx.get("project_id", "")
+
+    lines.append(f"【你的当前状态 @ {project_id}】")
+    lines.append(f"用户：{user_id}")
+    lines.append("")
+
+    tasks = ctx.get("my_open_tasks", [])
+    if tasks:
+        lines.append("📌 你当前的任务")
+        for t in tasks:
+            lines.append(f"- {t.get('title', '')}（{t.get('status', '')}）")
+        lines.append("")
+    else:
+        lines.append("📌 你当前没有分配给你的任务。")
+        lines.append("")
+
+    decisions = ctx.get("my_recent_decisions_involved", [])
+    if decisions:
+        lines.append("🧠 你参与的关键决策")
+        for d in decisions:
+            lines.append(f"- {d.get('title', '')}")
+        lines.append("")
+
+    risks = ctx.get("my_related_risks", [])
+    if risks:
+        lines.append("⚠️ 与你相关的风险")
+        for r in risks:
+            lines.append(f"- {r.get('description', '')}")
+        lines.append("")
+
+    next_acts = ctx.get("suggested_next_actions", [])
+    if next_acts:
+        lines.append("▶️ 推荐下一步")
+        for n in next_acts:
+            lines.append(f"- {n.get('title', '')}")
         lines.append("")
 
     return "\n".join(lines).strip() + "\n"

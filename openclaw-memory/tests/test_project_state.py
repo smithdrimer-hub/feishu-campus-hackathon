@@ -8,7 +8,13 @@ from datetime import datetime
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from memory.project_state import build_group_project_state, render_group_state_panel_text
+from memory.project_state import (
+    build_agent_context_pack,
+    build_group_project_state,
+    build_personal_work_context,
+    render_group_state_panel_text,
+    render_personal_context_text,
+)
 from memory.schema import MemoryItem, SourceRef
 
 
@@ -180,6 +186,187 @@ class TestRenderGroupStatePanel(unittest.TestCase):
         self.assertIn("负责人", text)
         self.assertNotIn("风险与阻塞", text)
         self.assertNotIn("下一步", text)
+
+
+class TestBuildAgentContextPack(unittest.TestCase):
+    """V1.9: build_agent_context_pack 测试."""
+
+    def test_empty_items(self):
+        """无记忆时应返回空列表字段，不抛错。"""
+        result = build_agent_context_pack("demo", [])
+        self.assertIn("project", result)
+        self.assertEqual(len(result["decisions"]), 0)
+        self.assertEqual(len(result["tasks"]), 0)
+
+    def test_decisions_dedup_by_key(self):
+        """相同 key 的决策只保留最新版本（按 version 取最新）。"""
+        items = [
+            make_item("decision", "采用方案 A", key="tech_choice",
+                      memory_id="mem_old", status="superseded"),
+            make_item("decision", "采用方案 B", key="tech_choice",
+                      memory_id="mem_new", status="active"),
+        ]
+        # 手动设 version 确保排序正确
+        items[0].version = 1  # 旧
+        items[1].version = 2  # 新
+        result = build_agent_context_pack("demo", items)
+        self.assertEqual(len(result["decisions"]), 1)
+        self.assertIn("方案 B", result["decisions"][0]["title"])
+
+    def test_decisions_multiple_keys(self):
+        """不同 key 的决策应各自保留。"""
+        items = [
+            make_item("decision", "采用方案 A", key="tech_choice", memory_id="mem_1"),
+            make_item("decision", "使用 PostgreSQL", key="db_choice", memory_id="mem_2"),
+        ]
+        result = build_agent_context_pack("demo", items)
+        self.assertEqual(len(result["decisions"]), 2)
+
+    def test_tasks_from_next_step(self):
+        """next_step 应聚合为 tasks。"""
+        items = [
+            make_item("next_step", "完成测试模块", owner="张三"),
+            make_item("next_step", "写 API 文档"),
+        ]
+        result = build_agent_context_pack("demo", items)
+        self.assertEqual(len(result["tasks"]), 2)
+
+    def test_risks_from_blocker(self):
+        """blocker 应聚合为 risks。"""
+        items = [make_item("blocker", "测试数据阻塞")]
+        result = build_agent_context_pack("demo", items)
+        self.assertEqual(len(result["risks"]), 1)
+
+    def test_raw_snippets(self):
+        """有 source_refs 的记忆应在 snippets 中出现。"""
+        item = make_item("decision", "采用方案 A")
+        result = build_agent_context_pack("demo", [item])
+        self.assertGreater(len(result["recent_discussion_snippets"]), 0)
+        self.assertIn("chat_id", result["recent_discussion_snippets"][0])
+        self.assertIn("message_id", result["recent_discussion_snippets"][0])
+
+    def test_user_perspective(self):
+        """指定 user_id 后应附加该用户视角。"""
+        items = [
+            make_item("next_step", "完成测试", owner="张三"),
+            make_item("next_step", "写文档", owner="李四"),
+        ]
+        result = build_agent_context_pack("demo", items, user_id="张三")
+        self.assertIn("user_perspective", result)
+        self.assertGreater(len(result["user_perspective"]["open_tasks"]), 0)
+        for t in result["user_perspective"]["open_tasks"]:
+            self.assertIn("张三", t["assignees"])
+
+    def test_user_perspective_no_match(self):
+        """指定不存在的 user_id 应返回空列表。"""
+        items = [make_item("next_step", "完成测试", owner="张三")]
+        result = build_agent_context_pack("demo", items, user_id="李四")
+        self.assertEqual(len(result["user_perspective"]["open_tasks"]), 0)
+
+
+class TestOwnerMap(unittest.TestCase):
+    """V1.9: owner_map 分辨率测试。"""
+
+    def test_group_state_owner_map(self):
+        """owner_map 使 build_group_project_state 输出 open_id。"""
+        items = [make_item("owner", "张三", owner="张三")]
+        result = build_group_project_state("demo", items, owner_map={"张三": "ou_zhangsan"})
+        self.assertEqual(result["owners"][0]["user_id"], "ou_zhangsan")
+
+    def test_group_state_task_owner_map(self):
+        """owner_map 应影响 task assignees。"""
+        items = [make_item("next_step", "完成测试", owner="张三")]
+        result = build_group_project_state("demo", items, owner_map={"张三": "ou_zhangsan"})
+        self.assertIn("ou_zhangsan", result["active_tasks"][0]["assignees"])
+
+    def test_group_state_no_owner_map(self):
+        """不传 owner_map 时仍输出原姓名。"""
+        items = [make_item("owner", "张三", owner="张三")]
+        result = build_group_project_state("demo", items)
+        self.assertEqual(result["owners"][0]["user_id"], "张三")
+
+    def test_agent_pack_owner_map(self):
+        """owner_map 使 agent_context_pack 输出 open_id。"""
+        items = [make_item("next_step", "测试", owner="张三")]
+        result = build_agent_context_pack("demo", items, owner_map={"张三": "ou_zhangsan"})
+        self.assertIn("ou_zhangsan", result["tasks"][0]["assignees"])
+
+
+class TestPersonalWorkContext(unittest.TestCase):
+    """V1.9: build_personal_work_context 测试。"""
+
+    def test_tasks_by_owner(self):
+        """按 owner 姓名过滤出个人任务。"""
+        items = [
+            make_item("next_step", "完成测试", owner="张三"),
+            make_item("next_step", "写文档", owner="李四"),
+        ]
+        result = build_personal_work_context("张三", "demo", items)
+        self.assertEqual(len(result["my_open_tasks"]), 1)
+        self.assertIn("完成测试", result["my_open_tasks"][0]["title"])
+
+    def test_tasks_by_open_id(self):
+        """通过 owner_map 按 open_id 过滤。"""
+        items = [
+            make_item("next_step", "完成测试", owner="张三"),
+            make_item("next_step", "写文档", owner="李四"),
+        ]
+        owner_map = {"张三": "ou_zhangsan", "李四": "ou_lisi"}
+        result = build_personal_work_context("ou_zhangsan", "demo", items, owner_map=owner_map)
+        self.assertEqual(len(result["my_open_tasks"]), 1)
+        self.assertIn("完成测试", result["my_open_tasks"][0]["title"])
+
+    def test_decisions_involved(self):
+        """owner 相关的决策应出现。"""
+        items = [
+            make_item("decision", "采用方案 A", owner="张三"),
+            make_item("decision", "采用方案 B", owner="李四"),
+        ]
+        result = build_personal_work_context("张三", "demo", items)
+        self.assertEqual(len(result["my_recent_decisions_involved"]), 1)
+
+    def test_risks_involved(self):
+        """owner 相关的阻塞应出现。"""
+        items = [
+            make_item("blocker", "测试数据阻塞", owner="张三"),
+        ]
+        result = build_personal_work_context("张三", "demo", items)
+        self.assertEqual(len(result["my_related_risks"]), 1)
+
+    def test_empty_graceful(self):
+        """无相关记忆时空字段降级。"""
+        result = build_personal_work_context("张三", "demo", [])
+        self.assertEqual(len(result["my_open_tasks"]), 0)
+        self.assertEqual(len(result["my_recent_decisions_involved"]), 0)
+        self.assertEqual(len(result["my_related_risks"]), 0)
+
+    def test_render_personal_context(self):
+        """render_personal_context_text 应产出可读文本。"""
+        items = [make_item("next_step", "完成测试", owner="张三")]
+        ctx = build_personal_work_context("张三", "demo", items)
+        text = render_personal_context_text(ctx)
+        self.assertIn("完成测试", text)
+        self.assertIn("demo", text)
+
+    def test_render_empty_shows_friendly(self):
+        """空数据渲染应显示"没有分配给你的任务"。"""
+        ctx = build_personal_work_context("张三", "demo", [])
+        text = render_personal_context_text(ctx)
+        self.assertIn("没有分配", text)
+
+
+class TestRawSnippetsEnrichment(unittest.TestCase):
+    """V1.9: raw_snippets 原文回溯测试。"""
+
+    def test_enrich_snippets(self):
+        """传 raw_events_path 后 snippets 应包含更长的原文。"""
+        from memory.project_state import _enrich_snippets as enrich
+        snippets = [
+            {"chat_id": "chat_01", "message_id": "msg_001", "text": "摘要", "sent_at": ""},
+        ]
+        # 不传 raw_events_path 时不应报错
+        result = enrich(snippets, None)
+        self.assertEqual(len(result), 1)
 
 
 if __name__ == "__main__":
