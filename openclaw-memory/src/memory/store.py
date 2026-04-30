@@ -82,6 +82,109 @@ class MemoryStore:
         }
         self.memory_state_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
+    def search_keywords(
+        self,
+        query: str,
+        project_id: str | None = None,
+        as_of: str | None = None,
+        top_k: int = 10,
+    ) -> list[tuple[MemoryItem, float]]:
+        """V1.9: 基于关键词的记忆搜索，返回匹配项列表（按相关度降序）。
+
+        在当前 active items 中搜索 query 中包含的关键词，
+        匹配字段：current_value（权重 2）、rationale（权重 1）、source_refs 摘要（权重 1）。
+        中文按字符搜索，英文按空格分词搜索，大小写不敏感。
+
+        这是语义搜索的前驱版本。后续可升级为向量搜索 + 混合融合。
+
+        Args:
+            query: 搜索关键词（如 "API 文档"、"张三 阻塞"）
+            project_id: 可选的项目 ID 过滤
+            as_of: 可选的时间点过滤
+            top_k: 返回的最大结果数，默认 10
+
+        Returns:
+            (MemoryItem, score) 元组列表，按 score 降序排列。
+            score 为正整数，越高表示匹配越充分。
+        """
+        items = self.list_items(project_id, as_of=as_of)
+        if not query.strip():
+            return [(item, 0.0) for item in items[:top_k]]
+
+        # 分词：中文按字符 + 英文按空格
+        # 将中英文混合文本拆分为独立的搜索词
+        tokens = self._tokenize_query(query)
+
+        scored: list[tuple[MemoryItem, float, str]] = []
+        for item in items:
+            score = 0.0
+            matched_fields: list[str] = []
+
+            for token in tokens:
+                # current_value 匹配（权重 2）
+                if token in item.current_value.lower():
+                    score += 2.0
+                    if "current_value" not in matched_fields:
+                        matched_fields.append("current_value")
+
+                # rationale 匹配（权重 1）
+                if token in item.rationale.lower():
+                    score += 1.0
+                    if "rationale" not in matched_fields:
+                        matched_fields.append("rationale")
+
+                # source_refs 摘要匹配（权重 1）
+                for ref in item.source_refs:
+                    if token in ref.excerpt.lower():
+                        score += 1.0
+                        if "source_refs" not in matched_fields:
+                            matched_fields.append("source_refs")
+
+            if score > 0:
+                scored.append((item, score, "; ".join(matched_fields)))
+
+        # 按分数降序排列
+        scored.sort(key=lambda x: x[1], reverse=True)
+        return [(item, s) for item, s, _ in scored[:top_k]]
+
+    @staticmethod
+    def _tokenize_query(query: str) -> list[str]:
+        """V1.9: 将搜索查询拆分为独立的搜索词。
+
+        中文按字符拆分（"API 文档" → ["api", "文", "档"]），
+        英文按空格分词后转小写。
+        去重。
+        """
+        import re
+        tokens: list[str] = []
+        # 按空格拆分
+        for part in query.split():
+            part = part.strip().lower()
+            if not part:
+                continue
+            # 检测是否纯英文
+            if re.match(r'^[a-zA-Z0-9_\-\.]+$', part):
+                tokens.append(part)
+            else:
+                # 中英文混合：英文部分整体添加，中文部分逐字
+                segments = re.findall(r'[a-zA-Z0-9_\-\.]+|[^a-zA-Z0-9_\-\.]', part)
+                for seg in segments:
+                    if re.match(r'^[a-zA-Z0-9_\-\.]+$', seg):
+                        tokens.append(seg.lower())
+                    else:
+                        # 中文逐字
+                        for ch in seg:
+                            if ch.strip():
+                                tokens.append(ch)
+        # 去重但保持顺序
+        seen = set()
+        deduped = []
+        for t in tokens:
+            if t not in seen:
+                seen.add(t)
+                deduped.append(t)
+        return deduped
+
     def list_items(self, project_id: str | None = None,
                    as_of: str | None = None) -> list[MemoryItem]:
         """Return active memory items, optionally filtered by project_id and/or as_of time.

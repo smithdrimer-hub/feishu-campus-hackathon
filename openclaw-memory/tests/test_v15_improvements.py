@@ -872,5 +872,43 @@ class TestMemberStatus(unittest.TestCase):
         self.assertEqual(len(member_status), 1)
 
 
+class TestDeadlineExtraction(unittest.TestCase):
+    """V1.8: 截止时间提取测试."""
+
+    def setUp(self):
+        self.extractor = RuleBasedExtractor()
+
+    def test_deadline_ddl(self):
+        """V1.8: DDL 关键词应提取为 deadline."""
+        event = {"project_id": "test", "chat_id": "chat", "message_id": "msg_001",
+                 "text": "DDL 到下周五", "created_at": "2026-04-28T10:00:00"}
+        items = self.extractor._extract_deadline(event, event["text"])
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].state_type, "deadline")
+
+    def test_deadline_change(self):
+        """V1.8: 截止时间变更."""
+        event = {"project_id": "test", "chat_id": "chat", "message_id": "msg_002",
+                 "text": "截止时间改到下周三", "created_at": "2026-04-28T10:00:00"}
+        items = self.extractor._extract_deadline(event, event["text"])
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].state_type, "deadline")
+
+    def test_deadline_postpone(self):
+        """V1.8: 延期."""
+        event = {"project_id": "test", "chat_id": "chat", "message_id": "msg_003",
+                 "text": "延期到明天", "created_at": "2026-04-28T10:00:00"}
+        items = self.extractor._extract_deadline(event, event["text"])
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].state_type, "deadline")
+
+    def test_deadline_no_false_positive(self):
+        """V1.8: 普通消息不应误触发."""
+        event = {"project_id": "test", "chat_id": "chat", "message_id": "msg_004",
+                 "text": "好的收到", "created_at": "2026-04-28T10:00:00"}
+        items = self.extractor._extract_deadline(event, event["text"])
+        self.assertEqual(len(items), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

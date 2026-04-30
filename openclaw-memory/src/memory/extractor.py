@@ -17,6 +17,15 @@ from memory.candidate import CandidateValidationError, candidate_to_memory_item,
 from memory.llm_provider import LLMProvider
 from memory.schema import MemoryItem, source_ref_from_event
 
+# V1.10 新增: 复杂语义信号 —— 当规则提取器遇到这些信号时需 LLM 补充
+_COMPLEX_SIGNALS = frozenset([
+    "不再", "改为", "取消", "换成", "改成", "转给",
+    "但是", "不过", "然而", "还是别",
+    "我来", "他来", "她来",
+    "放弃", "算了", "先后", "不做了", "回来了", "休假回来", "不阻塞", "扩容了",
+    "考虑", "是否", "待定",
+])
+
 
 class BaseExtractor:
     """Interface for future rule-based or LLM-based memory extractors."""
@@ -56,6 +65,8 @@ class LLMExtractor(BaseExtractor):
             items = [candidate_to_memory_item(candidate) for candidate in candidates]
             # V1.6: 后处理——过滤 ambiguous + 低置信度候选
             items = self._filter_ambiguous(items, candidates)
+            # V1.10: 标准化 state_type（goal → project_goal 等别名映射）
+            items = self._normalize_state_type(items)
             return items
         except (json.JSONDecodeError, KeyError, TypeError, CandidateValidationError):
             return self.fallback.extract(event_list)
@@ -81,6 +92,23 @@ class LLMExtractor(BaseExtractor):
             else:
                 filtered.append(item)
         return filtered
+
+    # V1.10: state_type 别名映射——将 LLM 可能输出的非标准类型标准化为枚举值
+    _STATE_TYPE_ALIASES = {
+        "goal": "project_goal",
+        "task": "next_step",
+        "status": "member_status",
+        "todo": "next_step",
+        "risk": "blocker",
+    }
+
+    def _normalize_state_type(self, items: list[MemoryItem]) -> list[MemoryItem]:
+        """标准化 MemoryItem 的 state_type，将别名映射为系统标准值。"""
+        for item in items:
+            canonical = self._STATE_TYPE_ALIASES.get(item.state_type)
+            if canonical is not None:
+                item.state_type = canonical
+        return items
 
     def _build_prompt(self, events: list[dict], author_map: dict[str, str] | None = None,
                       time_ref: dict[str, str] | None = None) -> str:
@@ -130,7 +158,7 @@ class LLMExtractor(BaseExtractor):
         prompt = f"""你是一个协作记忆提取助手，专门分析飞书群消息。
 
 【任务目标】
-提取当前仍会影响后续执行的协作状态，包括：目标、负责人、决策、阻塞事项、下一步行动。
+提取当前仍会影响后续执行的协作状态，包括：目标、负责人、决策、截止时间、阻塞事项、下一步行动、成员状态。
 
 【上下文信息】
 {time_context}
@@ -141,7 +169,7 @@ class LLMExtractor(BaseExtractor):
 
 【提取要求】
 1. 只提取当前仍会影响执行的状态（目标、负责人、决策、阻塞、下一步）
-2. 被后续消息推翻的旧决策要标记为 superseded
+2. 只添加新发现的协作状态，不判断是否与已有记忆冲突。下游系统会自动处理去重和版本管理。
 3. 返回严格 JSON 格式：{{"candidates": [...]}}
 
 【代词解析规则】(重要！)
@@ -169,15 +197,28 @@ class LLMExtractor(BaseExtractor):
 【输出格式】
 每个 candidate 必须包含以下字段：
 - project_id: 项目 ID（从消息中提取或使用 default）
-- state_type: 状态类型（goal/owner/decision/blocker/next_step/deferred）
+- state_type: 状态类型（必须是以下之一：project_goal / owner / decision / deadline / blocker / next_step / deferred / member_status。禁止使用 goal、task 等非标准值）
 - key: 记忆的唯一标识键
 - current_value: 当前值（具体信息）
 - rationale: 为什么这条记忆重要
 - owner: 负责人（可选）
-- status: 状态（active/superseded/deferred）
+- status: 状态（通常设为 "active"，superseded 由系统自动管理）
 - confidence: 置信度（0-1 之间的数字）
 - source_refs: 来源引用列表，每个引用包含 chat_id, message_id, excerpt, created_at
 - detected_at: 检测时间（ISO 格式）
+
+【禁止提取规则】(严格遵循！)
+以下情况**必须返回空的 candidates 列表**，不能提取任何状态：
+
+1. 系统消息：sender_type=system 的消息（群成员变更、机器人通知等），不包含协作信息
+2. 纯文件/图片/链接：消息内容只包含链接 URL、[图片]、[文件]、[Sticker] 等占位符
+3. 纯社交闲聊：问候（"大家好"）、告别（"下班了"）、天气/日常谈论
+4. 纯技术咨询：问句（"有谁知道怎么配吗"、"有人知道吗"）且没有明确的动作/决策指示
+5. 纯 FYI 通知：仅告知信息（"下周二放假"），没有指派/决策/阻塞/目标含义
+6. 纯 emoji/表情回复
+7. 纯确认回复："好的"、"收到"、"明白了"、"OK"
+
+判断原则：一条消息去掉所有协作关键词后，剩余内容不足以形成协作状态 → 返回空列表
 
 【消息列表】
 {json.dumps(events, ensure_ascii=False, indent=2)}
@@ -317,6 +358,7 @@ class RuleBasedExtractor(BaseExtractor):
             items.extend(self._extract_blocker(event, text))
             items.extend(self._extract_next_step(event, text))
             items.extend(self._extract_member_status(event, text))
+            items.extend(self._extract_deadline(event, text))
         return items
 
     def _event_text(self, event: dict) -> str:
@@ -365,8 +407,29 @@ class RuleBasedExtractor(BaseExtractor):
         ]
 
     def _extract_owner(self, event: dict, text: str) -> list[MemoryItem]:
-        """Extract current owner or responsible person statements."""
-        match = re.search(r"(?:负责人|owner|由)\s*[:：]?\s*([A-Za-z0-9_\-\u4e00-\u9fff]{1,20})\s*(?:负责|owner)?", text)
+        """Extract current owner or responsible person statements.
+
+        支持的格式：
+        - "负责人：张三" / "负责人:张三"
+        - "负责人：张三负责API文档" → owner = "张三"（不提取后面的"负责API文档"）
+        - "owner：张三" / "owner:张三"
+        - "由张三负责" / "由张三负责API文档" → owner = "张三"
+        - "由张三做" / "由张三处理" → owner = "张三"
+
+        修复：使用正向预查确保"负责/owner/做/处理"等词后的内容不被捕获为 owner 的一部分。
+        """
+        # "负责人：张三" / "owner：张三" 格式：匹配到下一个非空字符前的连续中英文名
+        match = re.search(
+            r"(?:负责人|owner)\s*[:：]\s*([A-Za-z0-9_\-\u4e00-\u9fff]{1,20})"
+            r"(?=\s*(?:负责|owner|做|处理|开发|测试|实现|设计|修改|跟进|对接|完成|编写|优化)?)",
+            text,
+        )
+        if not match:
+            # "由张三负责" / "由张三做" 格式
+            match = re.search(
+                r"由\s*([A-Za-z0-9_\-\u4e00-\u9fff]{1,20})\s*(?:负责|owner|做|处理|开发|测试|实现|设计|修改|跟进|对接|完成|编写|优化)",
+                text,
+            )
         if not match or "负责" not in text and "负责人" not in text.lower() and "owner" not in text.lower():
             return []
         owner = match.group(1)
@@ -471,7 +534,237 @@ class RuleBasedExtractor(BaseExtractor):
             )
         ]
 
+    def _extract_deadline(self, event: dict, text: str) -> list[MemoryItem]:
+        """V1.8: 提取截止时间/期限信息。
+
+        关键词：DDL/截止/deadline/延期/改到/调到
+        """
+        keywords = ("DDL", "截止", "deadline", "延期", "改到", "调到")
+        if not any(kw in text for kw in keywords):
+            return []
+        return [
+            self._base_item(
+                event,
+                text,
+                "deadline",
+                self._hash_key(text),
+                text,
+                "Message sets or changes a deadline or time constraint.",
+                0.68,
+            )
+        ]
+
     def _hash_key(self, text: str) -> str:
         """Return a compact stable key for text-scoped memory items."""
         digest = hashlib.sha1(text.encode("utf-8")).hexdigest()[:12]
         return f"item_{digest}"
+
+
+class HybridExtractor(BaseExtractor):
+    """Rule-first extractor that calls LLM only when rule results are insufficient.
+
+    V1.10 新增：轻量 hybrid 判断逻辑。
+    流程：
+    1. 先跑 RuleBasedExtractor
+    2. 检查规则结果是否需要 LLM 补充：
+       a) 规则结果为空（什么都没提取到）
+       b) 结果中所有 item 的 confidence 都 <= 0.65（低置信度）
+       c) 消息文本包含复杂语义信号（不再、改为、取消、我来、但是、考虑、是否等）
+       d) 结果缺少关键字段（owner=None 但消息提到了人名）
+       e) 单条消息包含多个动作（需要上下文）
+    3. 如果需要 LLM 补充，调用 LLM 提取器，LLM 输出经过 schema 校验
+    4. 将规则结果与 LLM 结果合并去重
+
+    安全保证：
+    - LLM 输出必须经过现有 schema 校验
+    - 校验失败时自动 fallback 到纯规则结果
+    - 不引入任何真实写入或安全策略变更
+    """
+
+    # 人名模式：中文名 2-4 字 / 英文名 / 单字母名（如 C）
+    _NAME_PATTERN = re.compile(
+        # 中文姓名模式：以常见姓氏开头，后接非姓名词后缀
+        r"(?:张|王|李|赵|刘|陈|杨|黄|吴|周|徐|孙|马|朱|胡|郭|何|高|林|罗|郑|梁|"
+        r"谢|宋|唐|韩|曹|许|邓|萧|冯|程|蔡|彭|潘|袁|于|董|余|叶|蒋|魏|苏|吕|杜|"
+        r"丁|沈|任|姚|卢|傅|钟|姜|崔|廖|谭|汪|范|金|石|贾|韦|夏|傅|方|白|邹|孟|"
+        r"熊|秦|邱|江|尹|薛|闫|段|雷|侯|龙|史|陶|黎|贺|顾|毛|郝|龚|邵|万|钱|严|"
+        r"覃|武|戴|莫|孔|向|汤)"
+        r"(?!案|法|式|向|针|面|位|便|能|言|向|型|块|向)"
+        r"[一-鿿]{1,3}|"
+        # 单字母代号
+        r"\b[A-Z]\b(?!\s*[a-z])"
+    )
+    # 复杂语义信号——当规则提取器遇到这些信号时需 LLM 补充
+    _COMPLEX_SIGNALS = frozenset([
+        "不再", "改为", "取消", "换成", "改成", "转给",
+        "但是", "不过", "然而", "还是别",
+        "我来", "他来", "她来",
+        "放弃", "算了", "先后", "不做了", "回来了", "休假回来", "不阻塞", "扩容了",
+        "考虑", "是否", "待定",
+    ])
+    # 低置信度阈值
+    _LOW_CONFIDENCE_THRESHOLD = 0.65
+
+    def __init__(
+        self,
+        rule_extractor: BaseExtractor | None = None,
+        llm_extractor: BaseExtractor | None = None,
+    ) -> None:
+        """Create a hybrid extractor.
+
+        Args:
+            rule_extractor: 规则提取器，默认 RuleBasedExtractor
+            llm_extractor: LLM 提取器，默认 None（纯规则模式）
+        """
+        self.rule = rule_extractor or RuleBasedExtractor()
+        self.llm = llm_extractor
+
+    def extract(self, events: Iterable[dict]) -> list[MemoryItem]:
+        """Rule-first extraction with optional LLM supplement."""
+        event_list = list(events)
+        if not event_list:
+            return []
+
+        # Step 1: 规则提取
+        rule_items = self.rule.extract(event_list)
+
+        # Step 2: 判断是否需要 LLM 补充
+        if self.llm is None:
+            return rule_items
+
+        if not self._needs_llm(rule_items, event_list):
+            return rule_items
+
+        # Step 3: LLM 提取（含 schema 校验 + fallback）
+        llm_items = self._safe_llm_extract(event_list)
+
+        # Step 4: 合并规则结果与 LLM 结果（去重）
+        return self._merge_results(rule_items, llm_items)
+
+    def _needs_llm(self, rule_items: list[MemoryItem], events: list[dict]) -> bool:
+        """判断是否需要用 LLM 补充提取。
+
+        Args:
+            rule_items: 规则提取的结果列表
+            events: 原始事件列表
+
+        Returns:
+            True 表示需要 LLM 补充
+        """
+        # (a) 规则结果为空
+        if not rule_items:
+            return True
+
+        # (b) 所有 item 的 confidence 都低
+        max_conf = max(item.confidence for item in rule_items)
+        if max_conf <= self._LOW_CONFIDENCE_THRESHOLD:
+            return True
+
+        # (c) 消息文本包含复杂语义信号
+        for event in events:
+            text = str(event.get("text", "") or event.get("content", "") or "")
+            if any(signal in text for signal in self._COMPLEX_SIGNALS):
+                return True
+
+        # (d) 结果缺少关键字段但消息提到了人名
+        for event in events:
+            text = str(event.get("text", "") or event.get("content", "") or "")
+            mentions_name = bool(self._NAME_PATTERN.search(text))
+            if not mentions_name:
+                continue
+            has_owner = any(item.owner is not None for item in rule_items)
+            if not has_owner:
+                return True
+
+        # (e) 单条消息包含多个动作
+        for event in events:
+            text = str(event.get("text", "") or event.get("content", "") or "")
+            clauses = re.split(r"[；;。！？\n]", text)
+            if len(clauses) >= 3:
+                return True
+
+        return False
+
+    def _safe_llm_extract(self, events: list[dict]) -> list[MemoryItem]:
+        """安全调用 LLM 提取，异常时返回空列表（不 fallback 到规则，避免循环）。
+
+        LLM 输出经过完整 schema 校验（validate_candidate_dict），
+        校验失败时返回空列表，由调用方决定如何处理。
+        """
+        try:
+            return self.llm.extract(events)
+        except Exception:
+            return []
+
+    def _merge_results(
+        self, rule_items: list[MemoryItem], llm_items: list[MemoryItem]
+    ) -> list[MemoryItem]:
+        """合并规则结果与 LLM 结果。
+
+        V1.10 增强：按 state_type 分组后做内容相似度感知的合并。
+        相同 state_type + 内容相似度 > 0.7 视为同一记忆，用 LLM 版本替换。
+        key 对齐确保 upsert_items 三层去重正确识别新旧版本关系。
+        """
+        from memory.store import MemoryStore
+
+        rule_by_type: dict[str, list[MemoryItem]] = {}
+        for item in rule_items:
+            rule_by_type.setdefault(item.state_type, []).append(item)
+
+        llm_by_type: dict[str, list[MemoryItem]] = {}
+        for item in llm_items:
+            llm_by_type.setdefault(item.state_type, []).append(item)
+
+        result: list[MemoryItem] = []
+        for state_type in list(rule_by_type.keys()) + [t for t in llm_by_type if t not in rule_by_type]:
+            rules = rule_by_type.get(state_type, [])
+            llms = llm_by_type.get(state_type, [])
+
+            if not rules:
+                result.extend(llms)
+                continue
+            if not llms:
+                result.extend(rules)
+                continue
+
+            used_llms = set()
+            for r_item in rules:
+                best_match = None
+                best_sim = 0.0
+                for i, l_item in enumerate(llms):
+                    if i in used_llms:
+                        continue
+                    sim = self._compute_bigram_similarity(
+                        r_item.current_value, l_item.current_value
+                    )
+                    if sim > best_sim:
+                        best_sim = sim
+                        best_match = i
+
+                if best_match is not None and best_sim > 0.7:
+                    llm_item = llms[best_match]
+                    llm_item.key = r_item.key
+                    result.append(llm_item)
+                    used_llms.add(best_match)
+                else:
+                    result.append(r_item)
+
+            for i, l_item in enumerate(llms):
+                if i not in used_llms:
+                    result.append(l_item)
+
+        return result
+
+    @staticmethod
+    def _compute_bigram_similarity(text1: str, text2: str) -> float:
+        """基于字符 bigram Jaccard 相似度，用于 merge 时内容匹配。"""
+        def get_char_bigrams(text: str) -> set[str]:
+            t = text.replace(" ", "").lower()
+            return {t[i:i+2] for i in range(len(t) - 1)}
+        b1 = get_char_bigrams(text1)
+        b2 = get_char_bigrams(text2)
+        if not b1 and not b2:
+            return 1.0
+        if not b1 or not b2:
+            return 0.0
+        return len(b1 & b2) / len(b1 | b2)

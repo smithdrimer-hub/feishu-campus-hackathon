@@ -1,13 +1,20 @@
-"""Golden set evaluation: measure precision/recall/F1 for memory extraction.
+"""Golden set evaluation: measure pass rate for memory extraction.
 
-Supports RuleBasedExtractor (default), LLM extraction (--llm),
-and comparison mode (--compare).
+Supports rule_only (default), hybrid (--hybrid), LLM-only (--llm),
+and comparison modes.
+
+V1.10 新增:
+- --hybrid: 规则优先 + 必要时 LLM 补充的 hybrid 模式
+- --report: 输出结构化 report 到 JSON 文件
+- 对比模式下输出详细的"hybrid 修复了哪些 rule-only 失败的案例"
 
 Usage:
-    python scripts/run_golden_eval.py                        # RuleBased
-    python scripts/run_golden_eval.py --llm                  # OpenAI
-    python scripts/run_golden_eval.py --compare              # Both
-    python scripts/run_golden_eval.py --llm --scenario blocker  # Filter
+    python scripts/run_golden_eval.py                          # RuleOnly (default)
+    python scripts/run_golden_eval.py --hybrid                 # Rule-first + LLM supplement
+    python scripts/run_golden_eval.py --llm                    # LLM only (OpenAI)
+    python scripts/run_golden_eval.py --compare                # All three: rule vs hybrid vs llm
+    python scripts/run_golden_eval.py --hybrid --scenario blocker  # Filter
+    python scripts/run_golden_eval.py --report report.json     # Save report to file
 """
 
 from __future__ import annotations
@@ -23,7 +30,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from memory.engine import MemoryEngine
-from memory.extractor import LLMExtractor, RuleBasedExtractor
+from memory.extractor import HybridExtractor, LLMExtractor, RuleBasedExtractor
 from memory.llm_provider import OpenAIProvider
 from memory.store import MemoryStore
 
@@ -77,16 +84,22 @@ def eval_case(sample: dict, extractor_name: str = "rule") -> dict:
 
     Args:
         sample: golden set 样本
-        extractor_name: "rule" 或 "llm"
+        extractor_name: "rule" / "hybrid" / "llm"
 
     Returns:
-        dict with: case_id, pass, extracted, expected, errors, scenario_type
+        dict with: case_id, pass, extracted, expected, errors, scenario_type, extractor
     """
     case_id = sample["case_id"]
     scenario_type = sample["scenario_type"]
-    expected_items = sample.get("expected_items", [])
-    expected_history = sample.get("expected_history", [])
-    should_not_extract = sample.get("should_not_extract", [])
+    uses_llm = extractor_name in ("hybrid", "llm")
+    if uses_llm and "llm_expected_items" in sample:
+        expected_items = sample.get("llm_expected_items", [])
+        expected_history = sample.get("llm_expected_history", sample.get("expected_history", []))
+        should_not_extract = sample.get("llm_should_not_extract", sample.get("should_not_extract", []))
+    else:
+        expected_items = sample.get("expected_items", [])
+        expected_history = sample.get("expected_history", [])
+        should_not_extract = sample.get("should_not_extract", [])
 
     if extractor_name == "llm":
         provider = get_llm_provider()
@@ -101,6 +114,14 @@ def eval_case(sample: dict, extractor_name: str = "rule") -> dict:
                 "errors": ["LLM not configured. Set OPENAI_API_KEY env var or create config.local.yaml"],
             }
         extractor = LLMExtractor(provider, fallback=RuleBasedExtractor())
+    elif extractor_name == "hybrid":
+        provider = get_llm_provider()
+        if provider is None:
+            # 没有 LLM 配置时 hybrid 降级为纯规则模式
+            extractor = HybridExtractor(rule_extractor=RuleBasedExtractor(), llm_extractor=None)
+        else:
+            llm_extractor = LLMExtractor(provider, fallback=RuleBasedExtractor())
+            extractor = HybridExtractor(rule_extractor=RuleBasedExtractor(), llm_extractor=llm_extractor)
     else:
         extractor = RuleBasedExtractor()
 
@@ -224,10 +245,14 @@ def main():
     parser.add_argument("--scenario", default=None,
                         help="Filter by scenario type (e.g. 'no_memory', 'decision')")
     parser.add_argument("--verbose", action="store_true", help="Show per-case details")
+    parser.add_argument("--hybrid", action="store_true",
+                        help="Use HybridExtractor (rule-first + LLM supplement)")
     parser.add_argument("--llm", action="store_true",
                         help="Use LLM extractor (OpenAI) instead of RuleBased")
     parser.add_argument("--compare", action="store_true",
-                        help="Run both RuleBased and LLM, show comparison")
+                        help="Run all modes and show comparison: rule_only vs hybrid vs llm")
+    parser.add_argument("--report", default=None,
+                        help="Save structured report JSON to path")
     args = parser.parse_args()
 
     golden_path = Path(args.golden_set)
@@ -240,12 +265,20 @@ def main():
         samples = [s for s in samples if s.get("scenario_type") == args.scenario]
         print(f"\nFiltered to scenario: {args.scenario} ({len(samples)} cases)")
 
-    extractors_to_run = ["llm"] if args.llm else ["rule"]
     if args.compare:
-        extractors_to_run = ["rule", "llm"]
+        extractors_to_run = ["rule", "hybrid", "llm"]
+    elif args.llm:
+        extractors_to_run = ["llm"]
+    elif args.hybrid:
+        extractors_to_run = ["hybrid"]
+    else:
+        extractors_to_run = ["rule"]
+
+    all_mode_results: dict[str, list[dict]] = {}
 
     for ext_name in extractors_to_run:
-        ext_label = "LLM (OpenAI)" if ext_name == "llm" else "RuleBasedExtractor"
+        ext_labels = {"rule": "RuleOnly", "hybrid": "Hybrid (Rule+LLM)", "llm": "LLM only"}
+        ext_label = ext_labels.get(ext_name, ext_name)
         print(f"\n{'='*60}")
         print(f"Golden Set Evaluation: {len(samples)} cases")
         print(f"{'='*60}")
@@ -287,33 +320,126 @@ def main():
             print(f"  {st:25s}: {m['passed']:2d}/{m['total']:2d} pass ({m['pass_rate']})")
         print()
 
-        # 列出失败的 case_id
-        if failed_cases and not args.compare:
-            print("--- Failures ---")
-            for r in failed_cases:
-                print(f"  {r['case_id']} ({r['scenario_type']}): {'; '.join(r['errors'])}")
-        elif not failed_cases:
-            print("All cases passed!")
+        # 列出失败的 case_id（非对比模式）
+        if not args.compare:
+            if failed_cases:
+                print("--- Failures ---")
+                for r in failed_cases:
+                    print(f"  {r['case_id']} ({r['scenario_type']}): {'; '.join(r['errors'][:2])}")
+            else:
+                print("All cases passed!")
 
-    # 对比模式输出汇总
+    # === 对比模式：rule vs hybrid vs llm ===
     if args.compare:
         print(f"\n{'='*60}")
-        print("Comparison Summary")
+        print("Comparison Report")
         print(f"{'='*60}")
-        # Re-run both and compare
-        rule_results = [eval_case(s, "rule") for s in samples]
-        llm_results = [eval_case(s, "llm") for s in samples]
+
+        rule_results = all_mode_results.get("rule", [])
+        hybrid_results = all_mode_results.get("hybrid", [])
+        llm_results = all_mode_results.get("llm", [])
+
         rule_pass = sum(1 for r in rule_results if r["pass"])
-        llm_pass = sum(1 for r in llm_results if r["pass"])
-        print(f"  RuleBasedExtractor: {rule_pass}/{len(samples)} pass ({rule_pass/len(samples)*100:.1f}%)")
-        print(f"  LLM (OpenAI):       {llm_pass}/{len(samples)} pass ({llm_pass/len(samples)*100:.1f}%)")
-        # 显示 LLM 新增通过的 case
-        new_passes = []
-        for r_rule, r_llm, s in zip(rule_results, llm_results, samples):
-            if not r_rule["pass"] and r_llm["pass"]:
-                new_passes.append(s["case_id"])
-        if new_passes:
-            print(f"  Cases LLM fixed: {', '.join(new_passes)}")
+        hybrid_pass = sum(1 for r in hybrid_results if r["pass"]) if hybrid_results else 0
+        llm_pass = sum(1 for r in llm_results if r["pass"]) if llm_results else 0
+
+        hybrid_available = len(hybrid_results) > 0
+        llm_available = len(llm_results) > 0 and not any(
+            "not configured" in str(r.get("errors", "")) for r in llm_results[:3]
+        )
+
+        print(f"\n--- Pass Rate Comparison ---")
+        print(f"  RuleOnly:          {rule_pass:3d}/{len(samples):3d} pass ({rule_pass/len(samples)*100:.1f}%)")
+        if hybrid_available:
+            print(f"  Hybrid (Rule+LLM): {hybrid_pass:3d}/{len(samples):3d} pass ({hybrid_pass/len(samples)*100:.1f}%)")
+        if llm_available:
+            print(f"  LLM only:          {llm_pass:3d}/{len(samples):3d} pass ({llm_pass/len(samples)*100:.1f}%)")
+
+        # Hybrid vs RuleOnly
+        if hybrid_available:
+            hybrid_fixed = []
+            for r_rule, r_hyb, s in zip(rule_results, hybrid_results, samples):
+                if not r_rule["pass"] and r_hyb["pass"]:
+                    hybrid_fixed.append(s["case_id"])
+            hybrid_regressed = []
+            for r_rule, r_hyb, s in zip(rule_results, hybrid_results, samples):
+                if r_rule["pass"] and not r_hyb["pass"]:
+                    hybrid_regressed.append(s["case_id"])
+
+            print(f"\n--- Hybrid vs RuleOnly ---")
+            if hybrid_fixed:
+                print(f"  RuleOnly failed but Hybrid PASSED ({len(hybrid_fixed)} cases):")
+                sample_map = {s["case_id"]: s for s in samples}
+                for cid in hybrid_fixed:
+                    s = sample_map[cid]
+                    print(f"    {cid} ({s['scenario_type']})")
+            else:
+                print("  Hybrid did not fix any additional cases (no LLM configured?)")
+
+            if hybrid_regressed:
+                print(f"  RuleOnly passed but Hybrid FAILED ({len(hybrid_regressed)} cases):")
+                for cid in hybrid_regressed:
+                    print(f"    {cid}")
+
+        # LLM vs RuleOnly
+        if llm_available:
+            llm_fixed = []
+            for r_rule, r_llm, s in zip(rule_results, llm_results, samples):
+                if not r_rule["pass"] and r_llm["pass"]:
+                    llm_fixed.append(s["case_id"])
+
+            print(f"\n--- LLM only vs RuleOnly ---")
+            if llm_fixed:
+                print(f"  RuleOnly failed but LLM PASSED ({len(llm_fixed)} cases):")
+                for cid in llm_fixed:
+                    print(f"    {cid}")
+            else:
+                print("  LLM only did not fix any additional cases.")
+
+        # Summary
+        print(f"\n--- Summary ---")
+        if hybrid_available:
+            total_fixed = len([1 for r_rule, r_hyb in zip(rule_results, hybrid_results) if not r_rule["pass"] and r_hyb["pass"]])
+            total_rule_fails = len([r for r in rule_results if not r["pass"]])
+            print(f"  Hybrid fixed {total_fixed}/{total_rule_fails} rule failures")
+        if llm_available:
+            total_llm_fixed = len([1 for r_rule, r_llm in zip(rule_results, llm_results) if not r_rule["pass"] and r_llm["pass"]])
+            total_rule_fails = len([r for r in rule_results if not r["pass"]])
+            print(f"  LLM fixed {total_llm_fixed}/{total_rule_fails} rule failures")
+
+    # === 结构化 report 输出 ===
+    if args.report:
+        report = {
+            "golden_set_file": str(golden_path),
+            "total_cases": len(samples),
+            "modes": {},
+        }
+        for ext_name, results in all_mode_results.items():
+            rc = sum(1 for r in results if r["pass"])
+            report["modes"][ext_name] = {
+                "pass_count": rc,
+                "fail_count": len(results) - rc,
+                "pass_rate": f"{rc/len(results)*100:.1f}%",
+                "failed_cases": [
+                    {"case_id": r["case_id"], "scenario_type": r["scenario_type"], "errors": r["errors"]}
+                    for r in results if not r["pass"]
+                ],
+            }
+
+        if args.compare:
+            rule_r = all_mode_results.get("rule", [])
+            hybrid_r = all_mode_results.get("hybrid", [])
+            report["comparison"] = {}
+            if hybrid_r:
+                report["comparison"]["hybrid_fixed"] = [
+                    s["case_id"] for r_rule, r_hyb, s in zip(rule_r, hybrid_r, samples)
+                    if not r_rule["pass"] and r_hyb["pass"]
+                ]
+
+        report_path = Path(args.report)
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"\nReport saved to: {report_path}")
 
 
 if __name__ == "__main__":

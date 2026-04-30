@@ -64,7 +64,18 @@ def validate_candidate_dict(data: dict[str, Any], valid_message_ids: Iterable[st
 
 
 def candidate_to_memory_item(candidate: MemoryCandidate) -> MemoryItem:
-    """Convert a validated MemoryCandidate into a MemoryItem."""
+    """Convert a validated MemoryCandidate into a MemoryItem.
+
+    ADD-only 策略（借鉴 mem0）：
+    LLM 只做 ADD 提取，不做 UPDATE/DELETE 判断。
+    如果 LLM 输出了 status="superseded"，系统强制改为 "active"，
+    由下游 upsert_items() 的三层去重逻辑处理版本冲突和 supersede。
+    """
+    # ADD-only: LLM 输出的 superseded 由系统去重层处理，不直接使用
+    status = candidate.status
+    if status == "superseded":
+        status = "active"
+
     return MemoryItem(
         project_id=candidate.project_id,
         state_type=candidate.state_type,
@@ -72,7 +83,7 @@ def candidate_to_memory_item(candidate: MemoryCandidate) -> MemoryItem:
         current_value=candidate.current_value,
         rationale=candidate.rationale,
         owner=candidate.owner,
-        status=candidate.status,
+        status=status,
         confidence=candidate.confidence,
         source_refs=candidate.source_refs,
         updated_at=candidate.detected_at,

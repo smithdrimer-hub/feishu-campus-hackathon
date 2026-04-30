@@ -12,6 +12,7 @@ SECTION_TITLES = {
     "project_goal": "当前项目目标",
     "owner": "当前负责人",
     "decision": "当前关键决策",
+    "deadline": "截止时间与期限",
     "deferred": "重要暂缓事项及原因",
     "blocker": "当前阻塞与风险",
     "next_step": "建议下一步",

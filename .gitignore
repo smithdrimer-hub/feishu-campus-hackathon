@@ -1,0 +1,24 @@
+# 敏感配置
+openclaw-memory/config.local.yaml
+
+# 运行时数据
+openclaw-memory/data/raw_events.jsonl
+openclaw-memory/data/memory_state.json
+openclaw-memory/data/example_run/
+
+# 测试临时目录
+openclaw-memory/.test-tmp/
+
+# Python 缓存
+__pycache__/
+*.pyc
+.env
+
+# 个人配置
+.claude/
+
+# 嵌入的 git 仓库（仅保留分析笔记，不提交克隆）
+opensourse_code/repos/
+
+# lark-cli 验证日志
+lark-cli-official-verify/

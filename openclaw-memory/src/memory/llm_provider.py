@@ -70,17 +70,27 @@ class OpenAIProvider(LLMProvider):
         self.model = model
         self.temperature = temperature
         self.max_tokens = max_tokens
-        self._supports_json_mode = base_url is None or "openai" in base_url.lower()
+        self._supports_json_mode = base_url is None or any(
+            provider in (base_url or "").lower()
+            for provider in ("openai", "api.openai")
+        )
 
     def generate(self, prompt: str) -> str:
         """Send prompt and return the JSON response text.
 
         尝试使用 response_format=json_object（OpenAI 原生支持），
         如果 base_url 指向非 OpenAI 服务，fallback 到普通 text 模式。
+        对非 json_object 的后端，prompt 会附加明确要求纯 JSON 的指令。
         """
+        final_prompt = prompt
+        if not self._supports_json_mode:
+            final_prompt = prompt.rstrip() + (
+                "\n\n【重要】只返回纯 JSON，不要包含 markdown 代码块、不要加说明文字。"
+                "直接以 { 开头，以 } 结尾。"
+            )
         kwargs = {
             "model": self.model,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": [{"role": "user", "content": final_prompt}],
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
         }

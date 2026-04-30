@@ -213,6 +213,34 @@ class MemoryEngine:
         print(f"sync_tasks: 已拉取 {len(tasks)} 个任务")
         return self.ingest_events(task_events)
 
+    def search(
+        self,
+        query: str,
+        project_id: str | None = None,
+        as_of: str | None = None,
+        top_k: int = 10,
+    ) -> list[tuple[MemoryItem, float]]:
+        """V1.9: 基于关键词搜索已提取的记忆。
+
+        委托给 MemoryStore.search_keywords() 实现。
+        不涉及向量/语义搜索，仅在当前活跃记忆的文本字段中做关键词匹配。
+
+        Args:
+            query: 搜索关键词
+            project_id: 可选的项目 ID 过滤
+            as_of: 可选的时间点过滤
+            top_k: 最大结果数
+
+        Returns:
+            (MemoryItem, score) 列表，按相关度降序
+        """
+        return self.store.search_keywords(
+            query=query,
+            project_id=project_id,
+            as_of=as_of,
+            top_k=top_k,
+        )
+
     def _should_process_now(self, project_id: str | None) -> tuple[bool, str]:
         """Check if extraction should proceed based on debounce timing.
 
