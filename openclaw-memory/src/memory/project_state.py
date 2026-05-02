@@ -85,6 +85,11 @@ def build_group_project_state(
             "title": val[:120],
             "status": "confirmed" if item.status == "active" else item.status,
             "decided_at": item.updated_at,
+            "source_refs": [
+                {"message_id": ref.message_id, "excerpt": ref.excerpt[:60],
+                 "sender": ref.sender_name, "url": ref.source_url}
+                for ref in item.source_refs
+            ],
         }
         # 简单判定：含"待定/考虑/是否" 视为未定案
         if any(kw in val for kw in ("待定", "考虑", "是否", "讨论")):
@@ -103,6 +108,11 @@ def build_group_project_state(
             "title": item.current_value[:120],
             "assignees": [resolved] if resolved else [],
             "status": "in_progress" if item.status == "active" else item.status,
+            "source_refs": [
+                {"message_id": ref.message_id, "excerpt": ref.excerpt[:60],
+                 "sender": ref.sender_name, "url": ref.source_url}
+                for ref in item.source_refs
+            ],
         })
 
     # Risks / blockers
@@ -112,6 +122,11 @@ def build_group_project_state(
             "id": item.memory_id,
             "description": item.current_value[:200],
             "severity": "high" if "严重" in item.current_value else "medium",
+            "source_refs": [
+                {"message_id": ref.message_id, "excerpt": ref.excerpt[:60],
+                 "sender": ref.sender_name, "url": ref.source_url}
+                for ref in item.source_refs
+            ],
         })
 
     # Next actions with owner
@@ -524,5 +539,102 @@ def render_personal_context_text(ctx: dict[str, Any]) -> str:
         for n in next_acts:
             lines.append(f"- {n.get('title', '')}")
         lines.append("")
+
+    return "\n".join(lines).strip() + "\n"
+
+
+# ── V1.12 FIX-9: 跨项目用户视图 ────────────────────────────────
+
+def build_cross_project_context(
+    owner_name: str,
+    project_items: dict[str, list[MemoryItem]],
+) -> dict[str, Any]:
+    """聚合用户在所有项目中的任务、阻塞、截止日期。
+
+    Args:
+        owner_name: 用户姓名（如 "张三"），支持模糊匹配。
+        project_items: {project_id: [MemoryItem, ...]} 多个项目的数据。
+
+    Returns:
+        {"projects": {pid: {"tasks": [...], "blockers": [...], "deadlines": [...]}}}
+    """
+    result: dict[str, Any] = {"user": owner_name, "projects": {}}
+
+    for pid, items in project_items.items():
+        user_tasks = []
+        user_blockers = []
+        user_deadlines = []
+
+        for item in items:
+            item_owner = item.owner or ""
+            if owner_name not in item_owner:
+                continue
+
+            entry = {
+                "memory_id": item.memory_id,
+                "title": item.current_value[:120],
+                "confidence": item.confidence,
+                "updated_at": item.updated_at,
+            }
+
+            if item.state_type == "next_step":
+                user_tasks.append(entry)
+            elif item.state_type == "blocker":
+                user_blockers.append(entry)
+            elif item.state_type == "deadline":
+                user_deadlines.append(entry)
+            elif item.state_type == "owner":
+                user_tasks.append({**entry, "title": f"负责: {item.current_value[:100]}"})
+
+        if user_tasks or user_blockers or user_deadlines:
+            result["projects"][pid] = {
+                "tasks": user_tasks,
+                "blockers": user_blockers,
+                "deadlines": user_deadlines,
+            }
+
+    return result
+
+
+def render_cross_project_text(ctx: dict[str, Any]) -> str:
+    """将 build_cross_project_context 的结果渲染为 Markdown。"""
+    user = ctx.get("user", "")
+    projects = ctx.get("projects", {})
+
+    lines = [f"【{user} 的跨项目视图】", ""]
+    total_tasks = 0
+    total_blockers = 0
+
+    for pid, data in sorted(projects.items()):
+        tasks = data.get("tasks", [])
+        blockers = data.get("blockers", [])
+        deadlines = data.get("deadlines", [])
+
+        if not tasks and not blockers and not deadlines:
+            continue
+
+        lines.append(f"## {pid}")
+        total_tasks += len(tasks)
+        total_blockers += len(blockers)
+
+        if tasks:
+            lines.append("📌 任务:")
+            for t in tasks:
+                lines.append(f"- {t['title']}")
+        if deadlines:
+            lines.append("⏰ 截止:")
+            for d in deadlines:
+                lines.append(f"- {d['title']}")
+        if blockers:
+            lines.append("⚠️ 阻塞:")
+            for b in blockers:
+                lines.append(f"- {b['title']}")
+        lines.append("")
+
+    if not projects:
+        lines.append("当前没有分配给你的任务。")
+    else:
+        lines.insert(1, f"共 {len(projects)} 个项目，{total_tasks} 个任务，{total_blockers} 个阻塞")
+        lines.insert(2, "")
 
     return "\n".join(lines).strip() + "\n"

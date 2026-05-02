@@ -48,5 +48,7 @@ def _render_refs(refs: list[SourceRef]) -> str:
         return "无"
     chunks = []
     for ref in refs:
-        chunks.append(f"{ref.chat_id}/{ref.message_id} @ {ref.created_at}: “{ref.excerpt}”")
+        sender = f"{ref.sender_name}: " if ref.sender_name else ""
+        url_hint = f" ({ref.source_url})" if ref.source_url else ""
+        chunks.append(f"{sender}“{ref.excerpt}”{url_hint}")
     return "；".join(chunks)

@@ -1,0 +1,682 @@
+{
+  "GS-032": {
+    "case_id": "GS-032",
+    "scenario": "implicit_decision",
+    "current_llm_expected": [
+      {
+        "state_type": "decision",
+        "key": null,
+        "current_value": "换个思路",
+        "status": "active"
+      }
+    ],
+    "current_llm_should_not": [
+      "decision"
+    ],
+    "current_llm_history": [],
+    "llm_actual": [
+      [
+        "decision",
+        null,
+        "decision_change_approach",
+        "换个思路",
+        0.7
+      ]
+    ],
+    "llm_history_actual": [],
+    "match": true
+  },
+  "GS-033": {
+    "case_id": "GS-033",
+    "scenario": "implicit_blocker",
+    "current_llm_expected": [
+      {
+        "state_type": "blocker",
+        "key": null,
+        "current_value": "API",
+        "status": "active"
+      }
+    ],
+    "current_llm_should_not": [],
+    "current_llm_history": [],
+    "llm_actual": [
+      [
+        "blocker",
+        null,
+        "blocker_api_not_ready",
+        "API未完成导致前端无法继续开发",
+        0.65
+      ]
+    ],
+    "llm_history_actual": [],
+    "match": true
+  },
+  "GS-034": {
+    "case_id": "GS-034",
+    "scenario": "implicit_deadline",
+    "current_llm_expected": [
+      {
+        "state_type": "deadline",
+        "key": null,
+        "current_value": "上线",
+        "status": "active"
+      }
+    ],
+    "current_llm_should_not": [],
+    "current_llm_history": [],
+    "llm_actual": [
+      [
+        "deadline",
+        null,
+        "deadline_friday_launch",
+        "2026-05-01（周五）",
+        0.85
+      ]
+    ],
+    "llm_history_actual": [],
+    "match": true
+  },
+  "GS-037": {
+    "case_id": "GS-037",
+    "scenario": "multi_intent_single_message",
+    "current_llm_expected": [
+      {
+        "state_type": "owner",
+        "key": "owner_李四",
+        "current_value": "李四",
+        "owner": "李四",
+        "status": "active"
+      },
+      {
+        "state_type": "decision",
+        "key": null,
+        "current_value": "方案A",
+        "status": "active"
+      }
+    ],
+    "current_llm_should_not": [],
+    "current_llm_history": [],
+    "llm_actual": [
+      [
+        "decision",
+        null,
+        "item_c4872a04a84c",
+        "负责人先张三后李四，决策用方案A",
+        0.75
+      ],
+      [
+        "decision",
+        null,
+        "decision_plan_a",
+        "方案A",
+        0.85
+      ],
+      [
+        "owner",
+        "李四",
+        "owner_lead",
+        "李四",
+        0.85
+      ]
+    ],
+    "llm_history_actual": [],
+    "match": true
+  },
+  "GS-040": {
+    "case_id": "GS-040",
+    "scenario": "sentence_negation_not_override",
+    "current_llm_expected": [
+      {
+        "state_type": "decision",
+        "key": null,
+        "current_value": "方案不错",
+        "status": "active"
+      }
+    ],
+    "current_llm_should_not": [],
+    "current_llm_history": [],
+    "llm_actual": [
+      [
+        "decision",
+        null,
+        "decision_adopt_plan",
+        "采用当前讨论的方案",
+        0.85
+      ]
+    ],
+    "llm_history_actual": [],
+    "match": true
+  },
+  "GS-076": {
+    "case_id": "GS-076",
+    "scenario": "decision_with_consider",
+    "current_llm_expected": [
+      {
+        "state_type": "decision",
+        "key": null,
+        "current_value": "Kubernetes",
+        "status": "active"
+      }
+    ],
+    "current_llm_should_not": [],
+    "current_llm_history": [],
+    "llm_actual": [
+      [
+        "decision",
+        null,
+        "decision_k8s_adopt",
+        "使用 Kubernetes",
+        0.7
+      ]
+    ],
+    "llm_history_actual": [],
+    "match": true
+  },
+  "GS-090": {
+    "case_id": "GS-090",
+    "scenario": "decision_with_whether",
+    "current_llm_expected": [
+      {
+        "state_type": "decision",
+        "key": null,
+        "current_value": "CI/CD Pipeline",
+        "status": "active"
+      }
+    ],
+    "current_llm_should_not": [],
+    "current_llm_history": [],
+    "llm_actual": [
+      [
+        "decision",
+        null,
+        "decision_ci_cd_pipeline",
+        "接入 CI/CD Pipeline",
+        0.7
+      ]
+    ],
+    "llm_history_actual": [],
+    "match": true
+  },
+  "GS-094": {
+    "case_id": "GS-094",
+    "scenario": "implicit_next_step",
+    "current_llm_expected": [
+      {
+        "state_type": "next_step",
+        "key": null,
+        "current_value": "提交代码",
+        "status": "active",
+        "owner": "张三"
+      }
+    ],
+    "current_llm_should_not": [
+      "next_step",
+      "owner"
+    ],
+    "current_llm_history": [],
+    "llm_actual": [
+      [
+        "next_step",
+        "张三",
+        "next_step_zhangsan_commit",
+        "提交代码",
+        0.85
+      ]
+    ],
+    "llm_history_actual": [],
+    "match": true
+  },
+  "GS-101": {
+    "case_id": "GS-101",
+    "scenario": "multi_intent_single_message",
+    "current_llm_expected": [
+      {
+        "state_type": "owner",
+        "key": null,
+        "current_value": "李四",
+        "owner": "李四",
+        "status": "active"
+      },
+      {
+        "state_type": "decision",
+        "key": null,
+        "current_value": "方案A",
+        "status": "active"
+      }
+    ],
+    "current_llm_should_not": [],
+    "current_llm_history": [],
+    "llm_actual": [
+      [
+        "decision",
+        null,
+        "item_3ade811434e0",
+        "负责人先张三后李四，最后决定用方案A",
+        0.75
+      ],
+      [
+        "decision",
+        null,
+        "decision_approach",
+        "采用方案A",
+        0.85
+      ],
+      [
+        "owner",
+        "李四",
+        "owner",
+        "李四",
+        0.85
+      ]
+    ],
+    "llm_history_actual": [],
+    "match": true
+  },
+  "GS-103": {
+    "case_id": "GS-103",
+    "scenario": "multiple_owners_same_message",
+    "current_llm_expected": [
+      {
+        "state_type": "owner",
+        "key": "owner_张三",
+        "current_value": "张三",
+        "owner": "张三",
+        "status": "active"
+      },
+      {
+        "state_type": "owner",
+        "key": "owner_李四",
+        "current_value": "李四",
+        "owner": "李四",
+        "status": "active"
+      },
+      {
+        "state_type": "owner",
+        "key": "owner_王五",
+        "current_value": "王五",
+        "owner": "王五",
+        "status": "active"
+      }
+    ],
+    "current_llm_should_not": [],
+    "current_llm_history": [],
+    "llm_actual": [
+      [
+        "owner",
+        "王五",
+        "current_owner",
+        "王五",
+        0.7
+      ]
+    ],
+    "llm_history_actual": [
+      [
+        "owner",
+        "张三",
+        "张三"
+      ],
+      [
+        "owner",
+        "李四",
+        "李四"
+      ]
+    ],
+    "match": true
+  },
+  "GS-107": {
+    "case_id": "GS-107",
+    "scenario": "owner_transfer",
+    "current_llm_expected": [
+      {
+        "state_type": "owner",
+        "key": null,
+        "current_value": "李四",
+        "owner": "李四",
+        "status": "active"
+      }
+    ],
+    "current_llm_should_not": [],
+    "current_llm_history": [],
+    "llm_actual": [
+      [
+        "owner",
+        "李四",
+        "owner_requirement",
+        "李四处理需求",
+        0.9
+      ]
+    ],
+    "llm_history_actual": [],
+    "match": true
+  },
+  "GS-108": {
+    "case_id": "GS-108",
+    "scenario": "owner_negation_reassign",
+    "current_llm_expected": [
+      {
+        "state_type": "owner",
+        "key": null,
+        "current_value": "李四",
+        "owner": "李四",
+        "status": "active"
+      }
+    ],
+    "current_llm_should_not": [],
+    "current_llm_history": [
+      {
+        "state_type": "owner",
+        "current_value": "张三"
+      }
+    ],
+    "llm_actual": [
+      [
+        "owner",
+        "张三",
+        "current_owner",
+        "张三",
+        0.9
+      ],
+      [
+        "decision",
+        "李四",
+        "decision_owner_change_to_lisi",
+        "李四负责",
+        0.85
+      ]
+    ],
+    "llm_history_actual": [],
+    "match": false
+  },
+  "GS-112": {
+    "case_id": "GS-112",
+    "scenario": "decision_via_abandon",
+    "current_llm_expected": [
+      {
+        "state_type": "decision",
+        "key": null,
+        "current_value": "方案B",
+        "status": "active"
+      }
+    ],
+    "current_llm_should_not": [],
+    "current_llm_history": [],
+    "llm_actual": [
+      [
+        "decision",
+        null,
+        "decision_approach_b",
+        "采用方案B，放弃方案A",
+        0.9
+      ]
+    ],
+    "llm_history_actual": [],
+    "match": true
+  },
+  "GS-121": {
+    "case_id": "GS-121",
+    "scenario": "implicit_owner_response",
+    "current_llm_expected": [
+      {
+        "state_type": "owner",
+        "key": "current_owner",
+        "owner": "张三",
+        "status": "active"
+      }
+    ],
+    "current_llm_should_not": [],
+    "current_llm_history": [],
+    "llm_actual": [
+      [
+        "owner",
+        "张三",
+        "owner_frontend",
+        "前端开发",
+        0.85
+      ]
+    ],
+    "llm_history_actual": [],
+    "match": true
+  },
+  "GS-122": {
+    "case_id": "GS-122",
+    "scenario": "implicit_blocker",
+    "current_llm_expected": [
+      {
+        "state_type": "blocker",
+        "key": null,
+        "current_value": "设计稿",
+        "status": "active"
+      }
+    ],
+    "current_llm_should_not": [],
+    "current_llm_history": [],
+    "llm_actual": [
+      [
+        "blocker",
+        null,
+        "blocker_design_draft",
+        "设计稿未提供，前端无法开工",
+        0.85
+      ]
+    ],
+    "llm_history_actual": [],
+    "match": true
+  },
+  "GS-124": {
+    "case_id": "GS-124",
+    "scenario": "implicit_owner_offer",
+    "current_llm_expected": [
+      {
+        "state_type": "owner",
+        "key": "current_owner",
+        "owner": "李四",
+        "status": "active"
+      }
+    ],
+    "current_llm_should_not": [],
+    "current_llm_history": [],
+    "llm_actual": [
+      [
+        "owner",
+        "李四",
+        "owner_testing",
+        "测试部分",
+        0.7
+      ]
+    ],
+    "llm_history_actual": [],
+    "match": true
+  },
+  "GS-125": {
+    "case_id": "GS-125",
+    "scenario": "implicit_task_delegation",
+    "current_llm_expected": [
+      {
+        "state_type": "owner",
+        "key": "current_owner",
+        "owner": "王五",
+        "status": "active"
+      }
+    ],
+    "current_llm_should_not": [],
+    "current_llm_history": [],
+    "llm_actual": [
+      [
+        "owner",
+        "王五",
+        "owner_report_module",
+        "报表模块",
+        0.85
+      ]
+    ],
+    "llm_history_actual": [],
+    "match": true
+  },
+  "GS-130": {
+    "case_id": "GS-130",
+    "scenario": "deadline_changes_multiple",
+    "current_llm_expected": [
+      {
+        "state_type": "deadline",
+        "key": null,
+        "current_value": "周一",
+        "status": "active"
+      }
+    ],
+    "current_llm_should_not": [],
+    "current_llm_history": [
+      {
+        "state_type": "deadline",
+        "current_value": "DDL"
+      }
+    ],
+    "llm_actual": [
+      [
+        "deadline",
+        null,
+        "item_25bd12a576a3",
+        "DDL：周五",
+        0.68
+      ],
+      [
+        "deadline",
+        null,
+        "item_2b94419b9b6e",
+        "DDL 改到下周一",
+        0.68
+      ],
+      [
+        "deadline",
+        null,
+        "deadline_project",
+        "2026-05-08",
+        0.9
+      ]
+    ],
+    "llm_history_actual": [
+      [
+        "deadline",
+        null,
+        "2026-05-01"
+      ],
+      [
+        "deadline",
+        null,
+        "2026-05-04"
+      ]
+    ],
+    "match": true
+  },
+  "GS-132": {
+    "case_id": "GS-132",
+    "scenario": "deadline_urgent_update",
+    "current_llm_expected": [
+      {
+        "state_type": "deadline",
+        "key": null,
+        "current_value": "下周三",
+        "status": "active"
+      }
+    ],
+    "current_llm_should_not": [],
+    "current_llm_history": [
+      {
+        "state_type": "deadline",
+        "current_value": "DDL"
+      }
+    ],
+    "llm_actual": [
+      [
+        "deadline",
+        null,
+        "item_71f58e7a4c3d",
+        "DDL：下个月",
+        0.68
+      ]
+    ],
+    "llm_history_actual": [],
+    "match": true
+  },
+  "GS-141": {
+    "case_id": "GS-141",
+    "scenario": "source_doc_only",
+    "current_llm_expected": [
+      {
+        "state_type": "project_goal",
+        "key": "current_goal",
+        "current_value": "支付模块",
+        "status": "active"
+      },
+      {
+        "state_type": "owner",
+        "key": null,
+        "current_value": "张三",
+        "owner": "张三",
+        "status": "active"
+      }
+    ],
+    "current_llm_should_not": [],
+    "current_llm_history": [],
+    "llm_actual": [
+      [
+        "project_goal",
+        null,
+        "current_goal",
+        "【文档更新】需求文档 V3\n目标：完成支付模块\n负责人：张三",
+        0.65
+      ],
+      [
+        "owner",
+        "完成支付模块",
+        "current_owner",
+        "完成支付模块",
+        0.7
+      ]
+    ],
+    "llm_history_actual": [
+      [
+        "owner",
+        "张三",
+        "张三"
+      ]
+    ],
+    "match": true
+  },
+  "GS-145": {
+    "case_id": "GS-145",
+    "scenario": "multi_turn_new_blocker_after_old_resolved",
+    "current_llm_expected": [
+      {
+        "state_type": "blocker",
+        "key": null,
+        "current_value": "后端API",
+        "status": "active"
+      }
+    ],
+    "current_llm_should_not": [],
+    "current_llm_history": [
+      {
+        "state_type": "blocker",
+        "current_value": "设计稿"
+      }
+    ],
+    "llm_actual": [
+      [
+        "blocker",
+        null,
+        "item_88e18ef9d40b",
+        "阻塞：设计稿太慢了",
+        0.7
+      ],
+      [
+        "blocker",
+        null,
+        "blocker_backend_api_not_ready",
+        "后端API未提供",
+        0.9
+      ]
+    ],
+    "llm_history_actual": [],
+    "match": true
+  }
+}

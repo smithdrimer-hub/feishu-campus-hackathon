@@ -336,7 +336,7 @@ class TestPromptGrounding(unittest.TestCase):
 
         self.assertIn("代词解析规则", prompt)
         self.assertIn("时间解析规则", prompt)
-        self.assertIn("空间解析规则", prompt)
+        self.assertIn("隐式语义识别规则", prompt)
         self.assertIn("上下文信息", prompt)
         # P0: 新增内容检查
         self.assertIn("消息发送者映射", prompt,
@@ -910,5 +910,148 @@ class TestDeadlineExtraction(unittest.TestCase):
         self.assertEqual(len(items), 0)
 
 
+# ── V1.12 FIX-1: 跨时区时间比较测试 ───────────────────────────
+
+class TestCrossTimezoneComparison(unittest.TestCase):
+    """V1.12: 验证 _compare_iso_time 跨时区正确性."""
+
+    def setUp(self):
+        from memory.store import MemoryStore
+        self.store = MemoryStore("data")
+
+    def test_same_instant_different_timezone_equal(self):
+        """同一时刻不同时区表示应判为相等."""
+        self.assertEqual(
+            self.store._compare_iso_time(
+                "2026-04-28T01:00:00+00:00",
+                "2026-04-28T09:00:00+08:00",
+            ), 0)
+
+    def test_earlier_instant_less(self):
+        """较早的时刻應小于较晚的时刻."""
+        self.assertEqual(
+            self.store._compare_iso_time(
+                "2026-04-27T23:00:00+00:00",
+                "2026-04-28T01:00:00+00:00",
+            ), -1)
+
+    def test_z_suffix_vs_offset_equal(self):
+        """Z 后缀和 +00:00 应等价."""
+        self.assertEqual(
+            self.store._compare_iso_time(
+                "2026-04-28T01:00:00Z",
+                "2026-04-28T01:00:00+00:00",
+            ), 0)
+
+    def test_different_instant_greater(self):
+        """较晚的时刻應大于较早的时刻."""
+        self.assertEqual(
+            self.store._compare_iso_time(
+                "2026-04-28T10:00:00+08:00",
+                "2026-04-28T01:00:00+00:00",
+            ), 1)
+
+    def test_as_of_filters_correctly_cross_tz(self):
+        """as_of 在跨时区时应正确过滤."""
+        from memory.schema import MemoryItem, SourceRef
+        with __import__('tempfile').TemporaryDirectory() as td:
+            from memory.store import MemoryStore as MS
+            s = MS(__import__('pathlib').Path(td))
+            # Item valid from UTC 01:00 (which is Beijing 09:00)
+            item = MemoryItem(
+                project_id="t", state_type="decision", key="k",
+                current_value="v", rationale="r", owner=None,
+                status="active", confidence=0.8,
+                source_refs=[SourceRef("msg", "c", "m", "e", "2026-04-28T01:00:00Z")],
+                valid_from="2026-04-28T01:00:00Z",
+            )
+            s.save_state([item], [], [])
+            # Query at Beijing 08:00 (= UTC 00:00) — before valid_from
+            before = s.list_items("t", as_of="2026-04-28T00:00:00Z")
+            self.assertEqual(len(before), 0, "as_of before valid_from should return 0")
+            # Query at Beijing 10:00 (= UTC 02:00) — after valid_from
+            after = s.list_items("t", as_of="2026-04-28T02:00:00Z")
+            self.assertEqual(len(after), 1, "as_of after valid_from should return 1")
+
+
+# ── V1.12 FIX-7b: Layer 4 跨 key 覆盖边界测试 ─────────────────
+
+class TestLayer4CrossKey(unittest.TestCase):
+    def test_same_topic_decision_supersedes(self):
+        from memory.store import MemoryStore
+        from memory.schema import MemoryItem, SourceRef
+        from tempfile import TemporaryDirectory
+        from pathlib import Path
+        with TemporaryDirectory() as td:
+            s = MemoryStore(Path(td))
+            d1 = MemoryItem(project_id="t", state_type="decision", key="d1",
+                current_value="采用 React 作为前端框架", rationale="", owner=None,
+                status="active", confidence=0.8,
+                source_refs=[SourceRef("msg","c","m1","","")])
+            d2 = MemoryItem(project_id="t", state_type="decision", key="d2",
+                current_value="改为使用 Vue 替代 React", rationale="", owner=None,
+                status="active", confidence=0.8,
+                source_refs=[SourceRef("msg","c","m2","","")])
+            s.upsert_items([d1]); s.upsert_items([d2])
+            self.assertEqual(len(s.list_items("t")), 1, "shared topic -> old superseded")
+            self.assertEqual(len(s.list_history("t")), 1)
+
+    def test_different_topic_no_supersede(self):
+        from memory.store import MemoryStore
+        from memory.schema import MemoryItem, SourceRef
+        from tempfile import TemporaryDirectory
+        from pathlib import Path
+        with TemporaryDirectory() as td:
+            s = MemoryStore(Path(td))
+            d1 = MemoryItem(project_id="t", state_type="decision", key="d1",
+                current_value="确定使用 Docker 部署", rationale="", owner=None,
+                status="active", confidence=0.8,
+                source_refs=[SourceRef("msg","c","m1","","")])
+            d2 = MemoryItem(project_id="t", state_type="decision", key="d2",
+                current_value="采用 React 作为前端框架", rationale="", owner=None,
+                status="active", confidence=0.8,
+                source_refs=[SourceRef("msg","c","m2","","")])
+            s.upsert_items([d1]); s.upsert_items([d2])
+            self.assertEqual(len(s.list_items("t")), 2, "different topics -> both active")
+
+    def test_deadline_same_date_supersedes(self):
+        from memory.store import MemoryStore
+        from memory.schema import MemoryItem, SourceRef
+        from tempfile import TemporaryDirectory
+        from pathlib import Path
+        with TemporaryDirectory() as td:
+            s = MemoryStore(Path(td))
+            d1 = MemoryItem(project_id="t", state_type="deadline", key="dl1",
+                current_value="DDL 下周五 完成前端", rationale="", owner=None,
+                status="active", confidence=0.7,
+                source_refs=[SourceRef("msg","c","m1","","")])
+            d2 = MemoryItem(project_id="t", state_type="deadline", key="dl2",
+                current_value="DDL 改到下周三 延期交付", rationale="", owner=None,
+                status="active", confidence=0.7,
+                source_refs=[SourceRef("msg","c","m2","","")])
+            s.upsert_items([d1]); s.upsert_items([d2])
+            self.assertEqual(len(s.list_items("t")), 1)
+
+    def test_deadline_different_date_no_supersede(self):
+        from memory.store import MemoryStore
+        from memory.schema import MemoryItem, SourceRef
+        from tempfile import TemporaryDirectory
+        from pathlib import Path
+        with TemporaryDirectory() as td:
+            s = MemoryStore(Path(td))
+            d1 = MemoryItem(project_id="t", state_type="deadline", key="dl1",
+                current_value="DDL 下周五 前端完成", rationale="", owner=None,
+                status="active", confidence=0.7,
+                source_refs=[SourceRef("msg","c","m1","","")])
+            d2 = MemoryItem(project_id="t", state_type="deadline", key="dl2",
+                current_value="截止日期 下周一 后端交付", rationale="", owner=None,
+                status="active", confidence=0.7,
+                source_refs=[SourceRef("msg","c","m2","","")])
+            s.upsert_items([d1]); s.upsert_items([d2])
+            self.assertEqual(len(s.list_items("t")), 2, "different dates -> both active")
+
+
+if __name__ == "__main__":
+    unittest.main()
 if __name__ == "__main__":
     unittest.main()

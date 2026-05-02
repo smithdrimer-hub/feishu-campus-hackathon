@@ -29,6 +29,9 @@ READ_ONLY_COMMANDS: tuple[CommandSpec, ...] = (
     CommandSpec(("im", "+chat-messages-list"), CommandKind.READ_ONLY, "List chat messages"),
     CommandSpec(("im", "+messages-mget"), CommandKind.READ_ONLY, "Batch get messages"),
     CommandSpec(("docs", "+fetch"), CommandKind.READ_ONLY, "Fetch document content"),
+    CommandSpec(("drive", "file.comments", "list"), CommandKind.READ_ONLY, "List doc comments"),
+    CommandSpec(("contact", "+search"), CommandKind.READ_ONLY, "Search users by name"),
+    CommandSpec(("im", "+chat-members-list"), CommandKind.READ_ONLY, "List chat members"),
     CommandSpec(("task", "+search"), CommandKind.READ_ONLY, "Search tasks"),
     CommandSpec(("task", "+tasklist-search"), CommandKind.READ_ONLY, "Search tasklists"),
     CommandSpec(("task", "tasklists", "tasks"), CommandKind.READ_ONLY, "List tasklist tasks"),
@@ -37,6 +40,7 @@ READ_ONLY_COMMANDS: tuple[CommandSpec, ...] = (
 WRITE_COMMANDS: tuple[CommandSpec, ...] = (
     CommandSpec(("im", "+messages-send"), CommandKind.WRITE, "Send message"),
     CommandSpec(("im", "+messages-reply"), CommandKind.WRITE, "Reply to message"),
+    CommandSpec(("im", "pins"), CommandKind.WRITE, "Pin/unpin/list messages"),
     CommandSpec(("docs", "+create"), CommandKind.WRITE, "Create document"),
     CommandSpec(("docs", "+update"), CommandKind.WRITE, "Update document"),
     CommandSpec(("task", "+create"), CommandKind.WRITE, "Create task"),

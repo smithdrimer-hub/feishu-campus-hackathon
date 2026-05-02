@@ -369,5 +369,73 @@ class TestRawSnippetsEnrichment(unittest.TestCase):
         self.assertEqual(len(result), 1)
 
 
+# ── V1.12 FIX-9: 跨项目用户视图测试 ───────────────────────────
+
+class TestCrossProjectContext(unittest.TestCase):
+    """V1.12: 跨项目聚合测试。"""
+
+    def test_user_in_3_projects_aggregates_all(self):
+        """T9.1: 用户在 3 个项目各有任务 → 全部聚合。"""
+        from memory.project_state import build_cross_project_context
+        items_a = [make_item("next_step", "写API", owner="张三")]
+        items_b = [make_item("next_step", "画UI", owner="张三")]
+        items_c = [make_item("next_step", "测试", owner="张三")]
+        ctx = build_cross_project_context("张三", {
+            "proj_a": items_a, "proj_b": items_b, "proj_c": items_c,
+        })
+        self.assertEqual(len(ctx["projects"]), 3)
+        total = sum(len(p["tasks"]) for p in ctx["projects"].values())
+        self.assertEqual(total, 3)
+
+    def test_user_only_in_one_project(self):
+        """T9.2: 用户只在一个项目有任务 → 其他不出现。"""
+        from memory.project_state import build_cross_project_context
+        ctx = build_cross_project_context("张三", {
+            "proj_a": [make_item("next_step", "X", owner="张三")],
+            "proj_b": [make_item("next_step", "Y", owner="李四")],
+        })
+        self.assertEqual(len(ctx["projects"]), 1)
+        self.assertIn("proj_a", ctx["projects"])
+
+    def test_multi_type_coverage(self):
+        """T9.3: 用户有 owner+blocker+next_step → 全部列出。"""
+        from memory.project_state import build_cross_project_context
+        items = [
+            make_item("next_step", "任务1", owner="张三"),
+            make_item("blocker", "阻塞1", owner="张三"),
+            make_item("deadline", "周五", owner="张三"),
+        ]
+        ctx = build_cross_project_context("张三", {"p": items})
+        p = ctx["projects"]["p"]
+        self.assertEqual(len(p["tasks"]), 1)
+        self.assertEqual(len(p["blockers"]), 1)
+        self.assertEqual(len(p["deadlines"]), 1)
+
+    def test_empty_projects_returns_empty(self):
+        """T9.4: 用户在 0 个项目有任务 → 空字典。"""
+        from memory.project_state import build_cross_project_context
+        ctx = build_cross_project_context("张三", {
+            "a": [make_item("next_step", "X", owner="李四")],
+            "b": [make_item("blocker", "Y", owner="王五")],
+        })
+        self.assertEqual(len(ctx["projects"]), 0)
+
+    def test_fuzzy_owner_matching(self):
+        """T9.5: owner 模糊匹配 '张三' 应匹配 '张三负责API'。"""
+        from memory.project_state import build_cross_project_context
+        items = [make_item("next_step", "写文档", owner="张三负责API文档")]
+        ctx = build_cross_project_context("张三", {"p": items})
+        self.assertEqual(len(ctx["projects"]), 1)
+
+    def test_render_cross_project(self):
+        """render_cross_project_text 应产出可读文本。"""
+        from memory.project_state import build_cross_project_context, render_cross_project_text
+        items = [make_item("next_step", "完成测试", owner="张三")]
+        ctx = build_cross_project_context("张三", {"demo": items})
+        text = render_cross_project_text(ctx)
+        self.assertIn("张三", text)
+        self.assertIn("完成测试", text)
+
+
 if __name__ == "__main__":
     unittest.main()

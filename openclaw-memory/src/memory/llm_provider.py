@@ -72,7 +72,7 @@ class OpenAIProvider(LLMProvider):
         self.max_tokens = max_tokens
         self._supports_json_mode = base_url is None or any(
             provider in (base_url or "").lower()
-            for provider in ("openai", "api.openai")
+            for provider in ("openai", "api.openai", "deepseek", "groq")
         )
 
     def generate(self, prompt: str) -> str:

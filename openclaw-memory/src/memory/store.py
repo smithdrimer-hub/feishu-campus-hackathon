@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -24,6 +24,46 @@ class MemoryStore:
         self.data_dir = Path(data_dir)
         self.raw_events_path = self.data_dir / "raw_events.jsonl"
         self.memory_state_path = self.data_dir / "memory_state.json"
+        self.audit_path = self.data_dir / "audit.jsonl"
+
+    # ── V1.12 审计日志 ──────────────────────────────────────────
+
+    def audit_log(self, operator_id: str, operation: str,
+                  project_id: str = "", state_type: str = "",
+                  detail: str = "") -> None:
+        """V1.12: 记录操作审计日志 (AUTH-9)。
+
+        每条日志为 JSONL 一行，记录操作者、操作类型、时间等。
+        """
+        import json as _json
+        entry = {
+            "timestamp": self.data_dir and str(self.data_dir) or "",
+            "operator_id": operator_id,
+            "operation": operation,       # read / write / delete / search
+            "project_id": project_id,
+            "state_type": state_type,
+            "detail": detail[:200],
+        }
+        # 用实际时间替代
+        from datetime import datetime, timezone
+        entry["timestamp"] = datetime.now(timezone.utc).isoformat()
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+        with self.audit_path.open("a", encoding="utf-8") as f:
+            f.write(_json.dumps(entry, ensure_ascii=False) + "\n")
+
+    def read_audit_log(self, limit: int = 100) -> list[dict]:
+        """V1.12: 读取最近的审计日志。"""
+        if not self.audit_path.exists():
+            return []
+        entries = []
+        for line in self.audit_path.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                try:
+                    import json as _json
+                    entries.append(_json.loads(line))
+                except Exception:
+                    pass
+        return entries[-limit:]
 
     def ensure_files(self) -> None:
         """Create data files when they do not already exist."""
@@ -147,6 +187,62 @@ class MemoryStore:
         scored.sort(key=lambda x: x[1], reverse=True)
         return [(item, s) for item, s, _ in scored[:top_k]]
 
+    def search_advanced(
+        self,
+        project_id: str | None = None,
+        state_type: str | None = None,
+        keyword: str | None = None,
+        owner: str | None = None,
+        message_id: str | None = None,
+        as_of: str | None = None,
+        top_k: int = 20,
+    ) -> list[tuple[MemoryItem, float]]:
+        """V1.12: 多条件组合搜索。
+
+        所有条件 AND 组合。不传的条件不过滤。
+        关键词匹配 current_value/rationale/source_refs.excerpt。
+        """
+        items = self.list_items(project_id, as_of=as_of)
+
+        # 按 message_id 过滤
+        if message_id:
+            items = [
+                item for item in items
+                if any(ref.message_id == message_id for ref in item.source_refs)
+            ]
+
+        # 按 state_type 过滤
+        if state_type:
+            items = [item for item in items if item.state_type == state_type]
+
+        # 按 owner 过滤
+        if owner:
+            items = [item for item in items if item.owner and owner in item.owner]
+
+        # 关键词评分
+        if keyword and keyword.strip():
+            tokens = self._tokenize_query(keyword)
+            scored: list[tuple[MemoryItem, float]] = []
+            for item in items:
+                score = 0.0
+                for token in tokens:
+                    if token in item.current_value.lower():
+                        score += 2.0
+                    if token in item.rationale.lower():
+                        score += 1.0
+                    for ref in item.source_refs:
+                        if token in ref.excerpt.lower():
+                            score += 1.0
+                            break
+                if score > 0:
+                    scored.append((item, score))
+            scored.sort(key=lambda x: x[1], reverse=True)
+            return scored[:top_k]
+
+        # 无关键词时按更新时间倒序
+        items.sort(key=lambda x: x.updated_at, reverse=True)
+        return [(item, 1.0) for item in items[:top_k]]
+
     @staticmethod
     def _tokenize_query(query: str) -> list[str]:
         """V1.9: 将搜索查询拆分为独立的搜索词。
@@ -186,20 +282,13 @@ class MemoryStore:
         return deduped
 
     def list_items(self, project_id: str | None = None,
-                   as_of: str | None = None) -> list[MemoryItem]:
-        """Return active memory items, optionally filtered by project_id and/or as_of time.
+                   as_of: str | None = None,
+                   user_id: str | None = None) -> list[MemoryItem]:
+        """Return active memory items, optionally filtered.
 
-        V1.6: 增加 as_of 参数，返回某一时间点有效的记忆。
-        - as_of 为 None 时返回当前所有 active items（默认行为）
-        - as_of 为 ISO 时间字符串时，返回 valid_from ≤ as_of < valid_to 的 item
-        - 旧数据 valid_from="" 视为始终有效，在 as_of 查询中也被返回
-
-        Args:
-            project_id: 可选的项目 ID 过滤
-            as_of: 可选的 ISO 时间字符串，返回该时刻有效的记忆
-
-        Returns:
-            符合条件的记忆项列表
+        V1.12: 增加 user_id 参数，按用户身份过滤记忆（AUTH-4）。
+        过滤逻辑：记忆的 source_refs 中 sender_id 匹配 user_id 的返回。
+        user_id=None 时不过滤（兼容旧行为）。
         """
         state = self.load_state()
         items = [MemoryItem.from_dict(item) for item in state.get("items", [])]
@@ -207,6 +296,11 @@ class MemoryStore:
             items = [item for item in items if item.project_id == project_id]
         if as_of is not None:
             items = self._filter_as_of(items, as_of)
+        if user_id is not None:
+            items = [
+                item for item in items
+                if any(ref.sender_id == user_id for ref in item.source_refs)
+            ]
         return items
 
     @staticmethod
@@ -219,8 +313,9 @@ class MemoryStore:
         try:
             dt = datetime.fromisoformat(t.replace("Z", "+00:00"))
             if dt.tzinfo is not None:
-                # 转为 UTC 并去掉 tzinfo，统一比较
-                dt = dt.astimezone(datetime.fromisoformat("+00:00").tzinfo).replace(tzinfo=None)
+                # V1.12 FIX-1: 使用 datetime.timezone.utc 替代 fromisoformat("+00:00")
+                # 后者在 Python<3.11 可能失败，静默回退到字符串比较
+                dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
             return dt
         except (ValueError, TypeError):
             return None
@@ -263,10 +358,47 @@ class MemoryStore:
             filtered.append(item)
         return filtered
 
-    def list_history(self) -> list[MemoryItem]:
-        """Return historical superseded memory items."""
+    def list_history(self, project_id: str | None = None) -> list[MemoryItem]:
+        """Return historical superseded memory items.
+
+        V1.12: 支持按 project_id 过滤。
+        """
         state = self.load_state()
-        return [MemoryItem.from_dict(item) for item in state.get("history", [])]
+        items = [MemoryItem.from_dict(item) for item in state.get("history", [])]
+        if project_id is not None:
+            items = [item for item in items if item.project_id == project_id]
+        return items
+
+    def find_items_by_message_id(self, message_id: str) -> list[MemoryItem]:
+        """V1.12: 查找所有引用了指定消息的活跃+历史记忆项。
+
+        用于证据链追溯：从一条消息反查它产生了哪些 MemoryItem。
+        """
+        state = self.load_state()
+        active = [MemoryItem.from_dict(item) for item in state.get("items", [])]
+        history = [MemoryItem.from_dict(item) for item in state.get("history", [])]
+        results = []
+        for item in active + history:
+            if any(ref.message_id == message_id for ref in item.source_refs):
+                results.append(item)
+        return results
+
+    def build_inverted_index(self) -> InvertedIndex:
+        """V1.12: 构建全文倒排索引。
+
+        索引 raw_events + active items + history items 的所有文本字段。
+        返回 InvertedIndex 实例，可复用于多次搜索。
+        """
+        idx = InvertedIndex()
+        events = self.read_raw_events()
+        idx.index_events(events)
+
+        state = self.load_state()
+        active = [MemoryItem.from_dict(item) for item in state.get("items", [])]
+        history_items = [MemoryItem.from_dict(item) for item in state.get("history", [])]
+        idx.index_items(active + history_items)
+
+        return idx
 
     def processed_event_ids(self) -> list[str]:
         """Return event ids that have already been processed into memory."""
@@ -381,59 +513,34 @@ class MemoryStore:
                 new_item.supersedes = [*old_item.supersedes, old_item.memory_id]
                 items = [item for item in items if item.memory_id != old_item.memory_id]
 
+            # V1.11 Layer 4: 跨 key 决策/截止日期覆盖
+            # 不同 key 但同主题 → 覆盖旧条目
+            if old_item is None and new_item.state_type in ("decision", "deadline"):
+                for existing in list(items):
+                    if existing.state_type != new_item.state_type:
+                        continue
+                    if existing.project_id != new_item.project_id:
+                        continue
+                    if self._is_same_topic(
+                        existing.current_value, new_item.current_value,
+                        new_item.state_type,
+                    ):
+                        if existing.valid_to is None:
+                            existing.valid_to = utc_now_iso()
+                        history.append(existing)
+                        new_item.version = existing.version + 1
+                        new_item.supersedes = [*existing.supersedes, existing.memory_id]
+                        items = [item for item in items if item.memory_id != existing.memory_id]
+                        old_key = existing.identity_key()
+                        if by_key.get(old_key) is existing:
+                            del by_key[old_key]
+
             # 插入新记忆
             by_key[new_item.identity_key()] = new_item
             items.append(new_item)
 
         self.save_state(items, history, processed)
         return items
-
-    def _compute_text_similarity(self, text1: str, text2: str) -> float:
-        """Compute similarity between two texts using character n-gram Jaccard similarity.
-
-        V1.5 新增：基于字符 n-gram 的 Jaccard 相似度计算。
-        用于 Layer 3 语义去重，判断两段文本是否表达相同含义。
-
-        算法说明：
-        1. 将文本拆分为字符 bigram（连续 2 字符）集合
-        2. 计算 Jaccard 相似度：|A ∩ B| / |A ∪ B|
-        3. 返回 0-1 之间的相似度分数
-
-        Args:
-            text1: 第一段文本
-            text2: 第二段文本
-
-        Returns:
-            相似度分数（0-1 之间，1 表示完全相同）
-        """
-
-        def get_char_bigrams(text: str) -> set[str]:
-            """将文本拆分为字符 bigram 集合。
-
-            Args:
-                text: 输入文本
-
-            Returns:
-                bigram 集合
-            """
-            # 去除空格，统一为小写（对英文有效）
-            text = text.replace(" ", "").lower()
-            # 提取连续 2 字符
-            return {text[i : i + 2] for i in range(len(text) - 1) if i + 2 <= len(text)}
-
-        bigrams1 = get_char_bigrams(text1)
-        bigrams2 = get_char_bigrams(text2)
-
-        # 处理空集合情况
-        if not bigrams1 and not bigrams2:
-            return 1.0
-        if not bigrams1 or not bigrams2:
-            return 0.0
-
-        # Jaccard 相似度：交集 / 并集
-        intersection = len(bigrams1 & bigrams2)
-        union = len(bigrams1 | bigrams2)
-        return intersection / union if union > 0 else 0.0
 
     # 中文否定词集合，用于检测语义极性变化
     _NEGATION_WORDS = frozenset(["不", "没", "别", "勿", "未", "无", "否", "莫", "休", "甭"])
@@ -470,3 +577,178 @@ class MemoryStore:
         has_neg1 = _has_effective_negation(text1)
         has_neg2 = _has_effective_negation(text2)
         return has_neg1 != has_neg2
+
+    @staticmethod
+    def _compute_text_similarity(text1: str, text2: str) -> float:
+        """Compute similarity between two texts using character n-gram Jaccard similarity.
+        Made static for reuse in cross-key decision detection."""
+        def get_char_bigrams(text: str) -> set[str]:
+            text = text.replace(" ", "").lower()
+            return {text[i : i + 2] for i in range(len(text) - 1) if i + 2 <= len(text)}
+        bigrams1 = get_char_bigrams(text1)
+        bigrams2 = get_char_bigrams(text2)
+        if not bigrams1 and not bigrams2:
+            return 1.0
+        if not bigrams1 or not bigrams2:
+            return 0.0
+        intersection = len(bigrams1 & bigrams2)
+        union = len(bigrams1 | bigrams2)
+        return intersection / union if union > 0 else 0.0
+
+    @staticmethod
+    def _is_same_topic(text1: str, text2: str, state_type: str = "decision") -> bool:
+        """V1.11: 判断两个同类型条目是否属于同一主题（应触发跨 key 覆盖）。
+
+        支持 decision 和 deadline。
+        """
+        import re
+
+        # 覆盖信号词
+        override_signals = ("改为", "不再", "换成", "改成", "算了", "改用",
+                           "延期", "改到", "调到", "提前", "推后")
+        has_override = any(s in text2 for s in override_signals)
+
+        # 对于 deadline，额外检查数字日期重叠
+        if state_type == "deadline":
+            # 提取日期关键词（周一~周日/数字日期）
+            date_words = set(re.findall(
+                r"(下?周[一二三四五六日天]|明天|后天|今天|下?个?月[初底]|\d+月\d+[日号]|\d+[/-]\d+)",
+                text1 + text2,
+            ))
+            if not date_words:
+                pass
+            else:
+                dates1 = set(re.findall(
+                    r"(下?周[一二三四五六日天]|明天|后天|今天|下?个?月[初底]|\d+月\d+[日号]|\d+[/-]\d+)",
+                    text1,
+                ))
+                dates2 = set(re.findall(
+                    r"(下?周[一二三四五六日天]|明天|后天|今天|下?个?月[初底]|\d+月\d+[日号]|\d+[/-]\d+)",
+                    text2,
+                ))
+                # 两条 deadline 都提到具体日期
+                # 只有共享相同日期词或有覆盖信号才判为同一主题
+                if dates1 and dates2:
+                    if dates1 & dates2:  # 共享同一日期词 → 同一 DL
+                        return True
+                    if has_override:     # 有覆盖信号 → 同一 DL 被修改
+                        return True
+                    # 不同日期且无覆盖信号 → 不同 DL，不合并
+                    return False
+
+        # 提取有意义词汇
+        def extract_keywords(t: str) -> set:
+            words = set()
+            for m in re.finditer(r"[一-鿿]{2,4}", t):
+                w = m.group()
+                if w not in ("采用", "使用", "改为", "不再", "换成", "改成",
+                             "决定", "决策", "确定", "作为", "替代", "前端",
+                             "后端", "框架", "方案", "这个", "那个", "或者",
+                             "延期", "改到", "调到", "截止", "DDL", "deadline",
+                             "交付", "完成", "之前"):
+                    words.add(w)
+            for m in re.finditer(r"[A-Za-z]{3,}", t):
+                words.add(m.group().lower())
+            return words
+
+        words1 = extract_keywords(text1)
+        words2 = extract_keywords(text2)
+        shared = words1 & words2
+
+        bigram_sim = MemoryStore._compute_text_similarity(text1, text2)
+
+        if has_override and shared:
+            return True
+        if len(shared) >= 2:
+            return True
+        if bigram_sim > 0.4:
+            return True
+        return False
+
+
+# ── V1.12 全文倒排索引 ──────────────────────────────────────────
+
+class InvertedIndex:
+    """轻量级全文倒排索引，用于加速 token 级检索。
+
+    不依赖任何外部库。索引 raw_events.jsonl + memory_state.json 中的文本字段。
+    中文按字分词，英文按空格/标点分词。大小写不敏感。
+    """
+
+    def __init__(self) -> None:
+        self._index: dict[str, set[str]] = {}  # token → {message_id, ...}
+
+    def index_events(self, events: list[dict]) -> int:
+        """索引 raw events 的文本字段。
+
+        Returns:
+            新增的 token 数。
+        """
+        added = 0
+        for event in events:
+            msg_id = str(event.get("message_id", ""))
+            if not msg_id:
+                continue
+            text = str(event.get("text", event.get("content", "")))
+            tokens = self._tokenize(text)
+            for token in tokens:
+                if token not in self._index:
+                    self._index[token] = set()
+                    added += 1
+                self._index[token].add(msg_id)
+        return added
+
+    def index_items(self, items: list) -> int:
+        """索引 MemoryItem 的文本字段。
+
+        Args:
+            items: MemoryItem 列表。
+        Returns:
+            新增的 token 数。
+        """
+        added = 0
+        for item in items:
+            texts = [item.current_value, item.rationale]
+            for ref in item.source_refs:
+                texts.append(ref.excerpt)
+            for text in texts:
+                tokens = self._tokenize(text)
+                for token in tokens:
+                    key = f"mem:{token}"
+                    if key not in self._index:
+                        self._index[key] = set()
+                        added += 1
+                    self._index[key].add(item.memory_id)
+        return added
+
+    def search(self, query: str, max_results: int = 50) -> list[str]:
+        """搜索匹配 token 的 message_id 列表。
+
+        Returns:
+            按匹配 token 数降序排列的 message_id 列表。
+        """
+        tokens = self._tokenize(query)
+        if not tokens:
+            return []
+        scores: dict[str, int] = {}
+        for token in tokens:
+            ids = self._index.get(token, set())
+            for mid in ids:
+                scores[mid] = scores.get(mid, 0) + 1
+        ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+        return [mid for mid, _ in ranked[:max_results]]
+
+    @staticmethod
+    def _tokenize(text: str) -> list[str]:
+        """分词：中文逐字，英文按空格/标点分词。"""
+        import re
+        text = text.lower().strip()
+        tokens: list[str] = []
+        # 提取英文词
+        for m in re.finditer(r"[a-z0-9_\-\.]{2,}", text):
+            tokens.append(m.group())
+        # 逐字提取中文
+        for ch in text:
+            if '一' <= ch <= '鿿':
+                tokens.append(ch)
+        return tokens

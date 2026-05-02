@@ -189,9 +189,65 @@ class TestAddOnlyStrategy(unittest.TestCase):
             fallback=RuleBasedExtractor()
         )
         items = MemoryEngine(store, extractor=extractor).ingest_events([raw_event()])
-        # 应该仍然提取到，且 status 为 active
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0].status, "active")
+
+
+# ── V1.12 FIX-11: excerpt 模糊验证测试 ─────────────────────────
+
+class TestExcerptVerification(unittest.TestCase):
+    """V1.12: LLM excerpt 模糊匹配测试。"""
+
+    def test_exact_substring_fast_path(self):
+        """T11.1: 精确子串 → True。"""
+        from memory.candidate import _excerpt_matches
+        self.assertTrue(_excerpt_matches("负责人：张三", "今天决定负责人：张三负责API"))
+
+    def test_paraphrase_fuzzy_match(self):
+        """T11.2: 改写 → 模糊匹配 True（高重叠度改写）。"""
+        from memory.candidate import _excerpt_matches
+        # 两段文本共享核心内容，仅增加修饰词
+        self.assertTrue(_excerpt_matches(
+            "张三负责API文档开发工作，需要在周五前完成",
+            "张三负责API文档开发工作，要求必须在本周五之前完成交付",
+        ))
+
+    def test_completely_different_text(self):
+        """T11.3: 完全不同 → False。"""
+        from memory.candidate import _excerpt_matches
+        self.assertFalse(_excerpt_matches(
+            "决策：采用React框架进行前端开发工作",
+            "今天天气不错适合出去玩顺便吃了火锅",
+        ))
+
+    def test_empty_excerpt_returns_false(self):
+        """T11.5: 空 excerpt → False。"""
+        from memory.candidate import _excerpt_matches
+        self.assertFalse(_excerpt_matches("", "任意文本"))
+        self.assertFalse(_excerpt_matches("任意文本", ""))
+
+    def test_short_excerpt_returns_false(self):
+        """T11.6: 短文本但共享 token 不足 → False。"""
+        from memory.candidate import _excerpt_matches
+        # 两段完全无关的短文本，共享 0 个 token
+        self.assertFalse(_excerpt_matches("天气不错", "请写测试报告并在周五前提交"))
+
+    def test_fabricated_excerpt_replaced(self):
+        """T11.4: LLM 捏造 excerpt → 验证失败，用原文替代。"""
+        from memory.candidate import _validate_source_refs, CandidateValidationError
+        ref = {
+            "type": "message", "chat_id": "c1", "message_id": "m1",
+            "excerpt": "张三决定采用全新的微服务架构替代现有单体应用",
+            "created_at": "2026-01-01T00:00:00",
+        }
+        event_map = {"m1": {
+            "text": "今天讨论了一下，决定还是用React做前端吧",
+            "sender": {"id": "u1", "name": "李四"},
+        }}
+        result = _validate_source_refs([ref], {"m1"}, event_map)
+        # 捏造的 excerpt 太长且不匹配 → 被替换为原文前240字符
+        self.assertIn("React", result[0].excerpt,
+                      "fabricated excerpt should be replaced with source text")
 
 
 if __name__ == "__main__":

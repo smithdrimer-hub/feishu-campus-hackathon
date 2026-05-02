@@ -1,0 +1,409 @@
+{
+  "items": [
+    {
+      "project_id": "e2e-p0-hybrid",
+      "state_type": "project_goal",
+      "key": "current_goal",
+      "current_value": "目标：完成 OpenClaw Memory Engine 端到端集成验证",
+      "rationale": "Message appears to define or restate the current project goal.",
+      "owner": null,
+      "status": "active",
+      "confidence": 0.65,
+      "source_refs": [
+        {
+          "type": "message",
+          "chat_id": "oc_e1c6a2c2a42b67606b91ad69bab226f4",
+          "message_id": "om_x100b507d9a9430acb3d874aab018283",
+          "excerpt": "目标：完成 OpenClaw Memory Engine 端到端集成验证",
+          "created_at": "2026-05-01 20:32"
+        }
+      ],
+      "version": 4,
+      "supersedes": [
+        "mem_8daa1321ef2d4c58ade221bbce923081",
+        "mem_50bb1a08428b4a24924b07e83f4aa91a",
+        "mem_04a5be9311e04188a48fac286dd85333"
+      ],
+      "updated_at": "2026-05-02T06:28:24.073633",
+      "memory_id": "mem_1d46b5e7c20242ec8c778129c550430d",
+      "valid_from": "2026-05-01 20:32",
+      "valid_to": null,
+      "recorded_at": "2026-05-02T06:28:24.073639"
+    },
+    {
+      "project_id": "e2e-p0-hybrid",
+      "state_type": "owner",
+      "key": "current_owner",
+      "current_value": "张三",
+      "rationale": "Message assigns or updates project responsibility.",
+      "owner": "张三",
+      "status": "active",
+      "confidence": 0.7,
+      "source_refs": [
+        {
+          "type": "message",
+          "chat_id": "oc_e1c6a2c2a42b67606b91ad69bab226f4",
+          "message_id": "om_x100b507d9bcbaca0b2178d84bbe0b26",
+          "excerpt": "负责人：张三负责 API 接口开发",
+          "created_at": "2026-05-01 20:32"
+        }
+      ],
+      "version": 4,
+      "supersedes": [
+        "mem_d3eea597f8a64ce1828108d1ce77a1f8",
+        "mem_4fffaa88972c4e2d9e02764fa50b21f7",
+        "mem_450ab46357f24a2b9ad5b9324af71c7d"
+      ],
+      "updated_at": "2026-05-02T06:28:24.073600",
+      "memory_id": "mem_b495c9da07a64d4491955ac2f12ab91d",
+      "valid_from": "2026-05-01 20:32",
+      "valid_to": null,
+      "recorded_at": "2026-05-02T06:28:24.073606"
+    },
+    {
+      "project_id": "e2e-p0-hybrid",
+      "state_type": "decision",
+      "key": "item_6f5ea028353f",
+      "current_value": "决策：采用 Hybrid 提取模式，规则优先 + LLM 补充",
+      "rationale": "Message records a decision that can affect future execution.",
+      "owner": null,
+      "status": "active",
+      "confidence": 0.75,
+      "source_refs": [
+        {
+          "type": "message",
+          "chat_id": "oc_e1c6a2c2a42b67606b91ad69bab226f4",
+          "message_id": "om_x100b507d9bdbb4a4b21d2fa0ee95c62",
+          "excerpt": "决策：采用 Hybrid 提取模式，规则优先 + LLM 补充",
+          "created_at": "2026-05-01 20:32"
+        }
+      ],
+      "version": 2,
+      "supersedes": [
+        "mem_d6aa6c33bc68455693fd032f2837da75"
+      ],
+      "updated_at": "2026-05-02T06:28:24.073572",
+      "memory_id": "mem_d63853bd87cb4b5b96e03df730122dae",
+      "valid_from": "",
+      "valid_to": null,
+      "recorded_at": "2026-05-02T06:28:24.073579"
+    },
+    {
+      "project_id": "e2e-p0-hybrid",
+      "state_type": "next_step",
+      "key": "item_5a08eab21caf",
+      "current_value": "协作测试 — @所有人 请关注以下事项：",
+      "rationale": "Message suggests work that should influence the next action plan.",
+      "owner": null,
+      "status": "active",
+      "confidence": 0.62,
+      "source_refs": [
+        {
+          "type": "message",
+          "chat_id": "oc_e1c6a2c2a42b67606b91ad69bab226f4",
+          "message_id": "om_x100b506d39d9f4b0b26f68c8d5f88ed",
+          "excerpt": "协作测试 — @所有人 请关注以下事项：",
+          "created_at": "2026-05-02 14:19"
+        }
+      ],
+      "version": 1,
+      "supersedes": [],
+      "updated_at": "2026-05-02T06:28:24.073346",
+      "memory_id": "mem_076c29495ede4b8c9935b11af0f3a888",
+      "valid_from": "",
+      "valid_to": null,
+      "recorded_at": "2026-05-02T06:28:24.073371"
+    },
+    {
+      "project_id": "e2e-p0-hybrid",
+      "state_type": "next_step",
+      "key": "item_4498b8252e73",
+      "current_value": "当前项目 (e2e-full) 暂无提取到的协作记忆。请先在群内讨论后重试。",
+      "rationale": "Message suggests work that should influence the next action plan.",
+      "owner": null,
+      "status": "active",
+      "confidence": 0.62,
+      "source_refs": [
+        {
+          "type": "message",
+          "chat_id": "oc_e1c6a2c2a42b67606b91ad69bab226f4",
+          "message_id": "om_x100b507db8e198a4b3f4b386fea469e",
+          "excerpt": "当前项目 (e2e-full) 暂无提取到的协作记忆。请先在群内讨论后重试。",
+          "created_at": "2026-05-01 20:41"
+        }
+      ],
+      "version": 1,
+      "supersedes": [],
+      "updated_at": "2026-05-02T06:28:24.073417",
+      "memory_id": "mem_18a494989b664211a35db3fb52dcd3ea",
+      "valid_from": "",
+      "valid_to": null,
+      "recorded_at": "2026-05-02T06:28:24.073425"
+    },
+    {
+      "project_id": "e2e-p0-hybrid",
+      "state_type": "next_step",
+      "key": "item_801529e35d11",
+      "current_value": "阻塞：lark-cli 不支持 --format json 参数，需要调整命令",
+      "rationale": "Message suggests work that should influence the next action plan.",
+      "owner": null,
+      "status": "active",
+      "confidence": 0.62,
+      "source_refs": [
+        {
+          "type": "message",
+          "chat_id": "oc_e1c6a2c2a42b67606b91ad69bab226f4",
+          "message_id": "om_x100b507d9beb1ca0b361415a962c55d",
+          "excerpt": "阻塞：lark-cli 不支持 --format json 参数，需要调整命令",
+          "created_at": "2026-05-01 20:32"
+        }
+      ],
+      "version": 1,
+      "supersedes": [],
+      "updated_at": "2026-05-02T06:28:24.073536",
+      "memory_id": "mem_698438c1f45a45babe43680647fad316",
+      "valid_from": "",
+      "valid_to": null,
+      "recorded_at": "2026-05-02T06:28:24.073542"
+    },
+    {
+      "project_id": "e2e-p0-hybrid",
+      "state_type": "blocker",
+      "key": "item_801529e35d11",
+      "current_value": "阻塞：lark-cli 不支持 --format json 参数，需要调整命令",
+      "rationale": "Message identifies a blocker, risk, or dependency.",
+      "owner": null,
+      "status": "active",
+      "confidence": 0.7,
+      "source_refs": [
+        {
+          "type": "message",
+          "chat_id": "oc_e1c6a2c2a42b67606b91ad69bab226f4",
+          "message_id": "om_x100b507d9beb1ca0b361415a962c55d",
+          "excerpt": "阻塞：lark-cli 不支持 --format json 参数，需要调整命令",
+          "created_at": "2026-05-01 20:32"
+        }
+      ],
+      "version": 1,
+      "supersedes": [],
+      "updated_at": "2026-05-02T06:28:24.073520",
+      "memory_id": "mem_fe4a12ee4f224d8aaad0e7dba867f700",
+      "valid_from": "",
+      "valid_to": null,
+      "recorded_at": "2026-05-02T06:28:24.073527"
+    }
+  ],
+  "history": [
+    {
+      "project_id": "e2e-p0-hybrid",
+      "state_type": "project_goal",
+      "key": "current_goal",
+      "current_value": "【项目状态】目标：完成 OpenClaw Memory Engine 端到端集成验证",
+      "rationale": "Message appears to define or restate the current project goal.",
+      "owner": null,
+      "status": "active",
+      "confidence": 0.65,
+      "source_refs": [
+        {
+          "type": "message",
+          "chat_id": "oc_e1c6a2c2a42b67606b91ad69bab226f4",
+          "message_id": "om_x100b506dc18fd8a8b377759f45f1d29",
+          "excerpt": "【项目状态】目标：完成 OpenClaw Memory Engine 端到端集成验证",
+          "created_at": "2026-05-02 14:25"
+        }
+      ],
+      "version": 1,
+      "supersedes": [],
+      "updated_at": "2026-05-02T06:28:24.072860",
+      "memory_id": "mem_8daa1321ef2d4c58ade221bbce923081",
+      "valid_from": "",
+      "valid_to": "2026-05-02T06:28:24.075644",
+      "recorded_at": "2026-05-02T06:28:24.072903"
+    },
+    {
+      "project_id": "e2e-p0-hybrid",
+      "state_type": "project_goal",
+      "key": "current_goal",
+      "current_value": "【项目状态】目标：OpenClaw Memory Engine V1.11 通过最终验证，准备比赛演示",
+      "rationale": "Message appears to define or restate the current project goal.",
+      "owner": null,
+      "status": "active",
+      "confidence": 0.65,
+      "source_refs": [
+        {
+          "type": "message",
+          "chat_id": "oc_e1c6a2c2a42b67606b91ad69bab226f4",
+          "message_id": "om_x100b506dcbd5bca0b4b25d921f66de9",
+          "excerpt": "【项目状态】目标：OpenClaw Memory Engine V1.11 通过最终验证，准备比赛演示",
+          "created_at": "2026-05-02 14:23"
+        }
+      ],
+      "version": 2,
+      "supersedes": [
+        "mem_8daa1321ef2d4c58ade221bbce923081"
+      ],
+      "updated_at": "2026-05-02T06:28:24.072991",
+      "memory_id": "mem_50bb1a08428b4a24924b07e83f4aa91a",
+      "valid_from": "2026-05-02 14:23",
+      "valid_to": "2026-05-02T06:28:24.075703",
+      "recorded_at": "2026-05-02T06:28:24.073002"
+    },
+    {
+      "project_id": "e2e-p0-hybrid",
+      "state_type": "project_goal",
+      "key": "current_goal",
+      "current_value": "目标：OpenClaw Memory Engine V1.11 通过最终验证，准备比赛演示",
+      "rationale": "Message appears to define or restate the current project goal.",
+      "owner": null,
+      "status": "active",
+      "confidence": 0.65,
+      "source_refs": [
+        {
+          "type": "message",
+          "chat_id": "oc_e1c6a2c2a42b67606b91ad69bab226f4",
+          "message_id": "om_x100b506d328868a8b2bdfd8b16cb534",
+          "excerpt": "目标：OpenClaw Memory Engine V1.11 通过最终验证，准备比赛演示",
+          "created_at": "2026-05-02 14:20"
+        }
+      ],
+      "version": 3,
+      "supersedes": [
+        "mem_8daa1321ef2d4c58ade221bbce923081",
+        "mem_50bb1a08428b4a24924b07e83f4aa91a"
+      ],
+      "updated_at": "2026-05-02T06:28:24.073275",
+      "memory_id": "mem_04a5be9311e04188a48fac286dd85333",
+      "valid_from": "2026-05-02 14:20",
+      "valid_to": "2026-05-02T06:28:24.075742",
+      "recorded_at": "2026-05-02T06:28:24.073282"
+    },
+    {
+      "project_id": "e2e-p0-hybrid",
+      "state_type": "owner",
+      "key": "current_owner",
+      "current_value": "张三处理前端展示页面的",
+      "rationale": "Message assigns or updates project responsibility.",
+      "owner": "张三处理前端展示页面的",
+      "status": "active",
+      "confidence": 0.7,
+      "source_refs": [
+        {
+          "type": "message",
+          "chat_id": "oc_e1c6a2c2a42b67606b91ad69bab226f4",
+          "message_id": "om_x100b506d32b700a4b2acef1f0a4c367",
+          "excerpt": "由张三处理前端展示页面的开发",
+          "created_at": "2026-05-02 14:20"
+        }
+      ],
+      "version": 1,
+      "supersedes": [],
+      "updated_at": "2026-05-02T06:28:24.073068",
+      "memory_id": "mem_d3eea597f8a64ce1828108d1ce77a1f8",
+      "valid_from": "",
+      "valid_to": "2026-05-02T06:28:24.075766",
+      "recorded_at": "2026-05-02T06:28:24.073076"
+    },
+    {
+      "project_id": "e2e-p0-hybrid",
+      "state_type": "owner",
+      "key": "current_owner",
+      "current_value": "沈哲熙负责后端引擎开发和评测体系",
+      "rationale": "Message assigns or updates project responsibility.",
+      "owner": "沈哲熙负责后端引擎开发和评测体系",
+      "status": "active",
+      "confidence": 0.7,
+      "source_refs": [
+        {
+          "type": "message",
+          "chat_id": "oc_e1c6a2c2a42b67606b91ad69bab226f4",
+          "message_id": "om_x100b506d329e14a0b20cd94bd9fc8f2",
+          "excerpt": "负责人：沈哲熙负责后端引擎开发和评测体系",
+          "created_at": "2026-05-02 14:20"
+        }
+      ],
+      "version": 2,
+      "supersedes": [
+        "mem_d3eea597f8a64ce1828108d1ce77a1f8"
+      ],
+      "updated_at": "2026-05-02T06:28:24.073220",
+      "memory_id": "mem_4fffaa88972c4e2d9e02764fa50b21f7",
+      "valid_from": "2026-05-02 14:20",
+      "valid_to": "2026-05-02T06:28:24.075782",
+      "recorded_at": "2026-05-02T06:28:24.073227"
+    },
+    {
+      "project_id": "e2e-p0-hybrid",
+      "state_type": "owner",
+      "key": "current_owner",
+      "current_value": "沈哲熙",
+      "rationale": "Message assigns or updates project responsibility.",
+      "owner": "沈哲熙",
+      "status": "active",
+      "confidence": 0.7,
+      "source_refs": [
+        {
+          "type": "message",
+          "chat_id": "oc_e1c6a2c2a42b67606b91ad69bab226f4",
+          "message_id": "om_x100b506d329e14a0b20cd94bd9fc8f2",
+          "excerpt": "负责人：沈哲熙负责后端引擎开发和评测体系",
+          "created_at": "2026-05-02 14:20"
+        }
+      ],
+      "version": 3,
+      "supersedes": [
+        "mem_d3eea597f8a64ce1828108d1ce77a1f8",
+        "mem_4fffaa88972c4e2d9e02764fa50b21f7"
+      ],
+      "updated_at": "2026-05-02T06:28:24.073245",
+      "memory_id": "mem_450ab46357f24a2b9ad5b9324af71c7d",
+      "valid_from": "2026-05-02 14:20",
+      "valid_to": "2026-05-02T06:28:24.075794",
+      "recorded_at": "2026-05-02T06:28:24.073253"
+    },
+    {
+      "project_id": "e2e-p0-hybrid",
+      "state_type": "decision",
+      "key": "item_d4e7b745e78c",
+      "current_value": "决策：比赛演示使用 Hybrid 模式，规则优先 + DeepSeek V4 Pro LLM 补充",
+      "rationale": "Message records a decision that can affect future execution.",
+      "owner": null,
+      "status": "active",
+      "confidence": 0.75,
+      "source_refs": [
+        {
+          "type": "message",
+          "chat_id": "oc_e1c6a2c2a42b67606b91ad69bab226f4",
+          "message_id": "om_x100b506d32adf4a0b27b0cef9a9eeba",
+          "excerpt": "决策：比赛演示使用 Hybrid 模式，规则优先 + DeepSeek V4 Pro LLM 补充",
+          "created_at": "2026-05-02 14:20"
+        }
+      ],
+      "version": 1,
+      "supersedes": [],
+      "updated_at": "2026-05-02T06:28:24.073189",
+      "memory_id": "mem_d6aa6c33bc68455693fd032f2837da75",
+      "valid_from": "",
+      "valid_to": "2026-05-02T06:28:24.077079",
+      "recorded_at": "2026-05-02T06:28:24.073197"
+    }
+  ],
+  "processed_event_ids": [
+    "om_x100b506d328868a8b2bdfd8b16cb534",
+    "om_x100b506d329e14a0b20cd94bd9fc8f2",
+    "om_x100b506d32a0f4a0b2126dfcdc09698",
+    "om_x100b506d32adf4a0b27b0cef9a9eeba",
+    "om_x100b506d32b700a4b2acef1f0a4c367",
+    "om_x100b506d39d9f4b0b26f68c8d5f88ed",
+    "om_x100b506dc18fd8a8b377759f45f1d29",
+    "om_x100b506dcbd5bca0b4b25d921f66de9",
+    "om_x100b507d9a9430acb3d874aab018283",
+    "om_x100b507d9bcbaca0b2178d84bbe0b26",
+    "om_x100b507d9bdbb4a4b21d2fa0ee95c62",
+    "om_x100b507d9beb1ca0b361415a962c55d",
+    "om_x100b507da414eca8b4aa9714e375cab",
+    "om_x100b507da54588a4b252ce5c0403096",
+    "om_x100b507db8e198a4b3f4b386fea469e",
+    "om_x100b518782ca6c88b358a2aad512512"
+  ],
+  "updated_at": "2026-05-02T06:28:24.077511"
+}

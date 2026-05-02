@@ -240,8 +240,8 @@ class TestHybridExtractorSignalCoverage(unittest.TestCase):
             ("是否接入 CI/CD", True),
             ("我来 review", True),
             ("张三不做了，换李四", True),
-            # (d) name mention without owner
-            ("张三负责这个模块吧", True),  # "负责" keyword triggers rule, but may not get owner
+            # (d) name mention without owner — V1.11: "张三负责" now correctly extracted by rule
+            ("张三负责这个模块吧", False),
             # no trigger — rules find it, enough confidence, no extra signal
             ("阻塞：测试数据还没准备好", False),
         ]

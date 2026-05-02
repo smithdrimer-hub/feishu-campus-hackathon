@@ -1,0 +1,110 @@
+{
+  "items": [
+    {
+      "project_id": "memory-sandbox-verify",
+      "state_type": "project_goal",
+      "key": "current_goal",
+      "current_value": "目标：完成 Memory Engine V1.5 三层去重模块。",
+      "rationale": "Message appears to define or restate the current project goal.",
+      "owner": null,
+      "status": "active",
+      "confidence": 0.65,
+      "source_refs": [
+        {
+          "type": "message",
+          "chat_id": "oc_e1c6a2c2a42b67606b91ad69bab226f4",
+          "message_id": "om_verify_001",
+          "excerpt": "目标：完成 Memory Engine V1.5 三层去重模块。",
+          "created_at": "2026-04-28T09:00:00+08:00"
+        }
+      ],
+      "version": 1,
+      "supersedes": [],
+      "updated_at": "2026-04-28T01:38:27.497039+00:00",
+      "memory_id": "mem_bbdb649af6a1498394a64261b6b47d69"
+    },
+    {
+      "project_id": "memory-sandbox-verify",
+      "state_type": "owner",
+      "key": "current_owner",
+      "current_value": "张三负责三层去重模块",
+      "rationale": "Message assigns or updates project responsibility.",
+      "owner": "张三负责三层去重模块",
+      "status": "active",
+      "confidence": 0.7,
+      "source_refs": [
+        {
+          "type": "message",
+          "chat_id": "oc_e1c6a2c2a42b67606b91ad69bab226f4",
+          "message_id": "om_verify_002",
+          "excerpt": "负责人：张三负责三层去重模块。",
+          "created_at": "2026-04-28T09:01:00+08:00"
+        }
+      ],
+      "version": 1,
+      "supersedes": [],
+      "updated_at": "2026-04-28T01:38:27.497122+00:00",
+      "memory_id": "mem_ec0a81ae63ae44b583967dc7c26d19d9"
+    },
+    {
+      "project_id": "memory-sandbox-verify",
+      "state_type": "decision",
+      "key": "item_01ab285147e7",
+      "current_value": "决策：采用字符 bigram 相似度加否定词检测方案。",
+      "rationale": "Message records a decision that can affect future execution.",
+      "owner": null,
+      "status": "active",
+      "confidence": 0.75,
+      "source_refs": [
+        {
+          "type": "message",
+          "chat_id": "oc_e1c6a2c2a42b67606b91ad69bab226f4",
+          "message_id": "om_verify_003",
+          "excerpt": "决策：采用字符 bigram 相似度加否定词检测方案。",
+          "created_at": "2026-04-28T09:02:00+08:00"
+        }
+      ],
+      "version": 1,
+      "supersedes": [],
+      "updated_at": "2026-04-28T01:38:27.497199+00:00",
+      "memory_id": "mem_3b6f0160581e4f7f931c3796dda69959"
+    },
+    {
+      "project_id": "memory-sandbox-verify",
+      "state_type": "blocker",
+      "key": "item_5dff7470c481",
+      "current_value": "阻塞：李四的 API 文档还没写。",
+      "rationale": "Message identifies a blocker, risk, or dependency.",
+      "owner": null,
+      "status": "active",
+      "confidence": 0.7,
+      "source_refs": [
+        {
+          "type": "message",
+          "chat_id": "oc_e1c6a2c2a42b67606b91ad69bab226f4",
+          "message_id": "om_verify_005",
+          "excerpt": "阻塞：李四的 API 文档还没写。",
+          "created_at": "2026-04-28T09:04:00+08:00"
+        }
+      ],
+      "version": 1,
+      "supersedes": [],
+      "updated_at": "2026-04-28T01:38:27.497238+00:00",
+      "memory_id": "mem_07722b17793942ad8308ecd49723aaa4"
+    }
+  ],
+  "history": [],
+  "processed_event_ids": [
+    "om_verify_001",
+    "om_verify_002",
+    "om_verify_003",
+    "om_verify_004",
+    "om_verify_005",
+    "om_x100b518782ca6c88b358a2aad512512",
+    "om_x100b51878ba4288cb3407297bf0fe48",
+    "om_x100b51878fd4a880c2dd6e88519a92c",
+    "om_x100b5187f38df0a4b48716be54486de",
+    "om_x100b5187f3f3bc88b3b5b97475a335d"
+  ],
+  "updated_at": "2026-04-28T01:38:27.497891+00:00"
+}

@@ -20,13 +20,19 @@ def utc_now_iso() -> str:
 
 @dataclass
 class SourceRef:
-    """Evidence anchor pointing back to the original Feishu message."""
+    """Evidence anchor pointing back to the original Feishu message.
+
+    V1.12: 新增 sender_name/sender_id/source_url 完善证据链。
+    """
 
     type: str
     chat_id: str
     message_id: str
     excerpt: str
     created_at: str
+    sender_name: str = ""
+    sender_id: str = ""
+    source_url: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize this source reference into a JSON-compatible dict."""
@@ -34,13 +40,18 @@ class SourceRef:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "SourceRef":
-        """Create a SourceRef from a JSON-compatible dict."""
+        """Create a SourceRef from a JSON-compatible dict.
+        V1.12: 向后兼容旧数据（缺失字段默认为空字符串）。
+        """
         return cls(
             type=str(data.get("type", "message")),
             chat_id=str(data.get("chat_id", "")),
             message_id=str(data.get("message_id", "")),
             excerpt=str(data.get("excerpt", "")),
             created_at=str(data.get("created_at", "")),
+            sender_name=str(data.get("sender_name", "")),
+            sender_id=str(data.get("sender_id", "")),
+            source_url=str(data.get("source_url", "")),
         )
 
 
@@ -107,14 +118,38 @@ class MemoryItem:
 
 
 def source_ref_from_event(event: dict[str, Any], excerpt: str | None = None) -> SourceRef:
-    """Build a SourceRef from a normalized raw event dict."""
+    """Build a SourceRef from a normalized raw event dict.
+
+    V1.12: 保留 sender 信息和 source_url，完善证据链。
+    """
     text = excerpt if excerpt is not None else str(event.get("text", event.get("content", "")))
+    chat_id = str(event.get("chat_id", ""))
+    message_id = str(event.get("message_id", ""))
+    sender = event.get("sender", {}) or {}
+
+    # 构建来源链接（V1.12: 区分消息和文档 URL）
+    source_url = ""
+    source_type = str(event.get("source_type", "message"))
+    if source_type == "doc":
+        # 文档链接：从 message_id 中提取 doc_id（格式: doc_{doc_id}_{hash}）
+        doc_id_raw = str(event.get("message_id", ""))
+        if doc_id_raw.startswith("doc_"):
+            parts = doc_id_raw.split("_", 1)
+            if len(parts) > 1:
+                doc_token = parts[1].rsplit("_", 1)[0]
+                source_url = f"https://www.feishu.cn/docx/{doc_token}"
+    elif chat_id and message_id:
+        source_url = f"https://app.feishu.cn/client/messages/{chat_id}/{message_id}"
+
     return SourceRef(
-        type="message",
-        chat_id=str(event.get("chat_id", "")),
-        message_id=str(event.get("message_id", "")),
+        type=str(event.get("source_type", "message")),
+        chat_id=chat_id,
+        message_id=message_id,
         excerpt=text[:240],
         created_at=str(event.get("created_at", "")),
+        sender_name=str(sender.get("name", sender.get("id", ""))),
+        sender_id=str(sender.get("id", "")),
+        source_url=source_url,
     )
 
 
