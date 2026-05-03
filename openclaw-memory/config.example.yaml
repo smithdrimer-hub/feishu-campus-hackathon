@@ -1,5 +1,5 @@
 # OpenClaw Memory Engine example config.
-# 复制为 config.local.yaml 并填入真实值。
+# Copy to config.local.yaml and fill in real values.
 
 project_id: openclaw-memory-demo
 default_backend: lark-cli
@@ -11,12 +11,22 @@ data:
 safety:
   auto_execute_readonly: true
   auto_execute_writes: false
-# LLM 配置（可选，不配置则使用 FakeLLMProvider）
+
+# LLM config (optional, defaults to FakeLLMProvider if not set)
 # llm:
-#   provider: "openai"                  # "openai" 或 "fake"
-#   api_key_env: "OPENAI_API_KEY"       # API key 所在的环境变量名
-#   api_key: "sk-your-key-here"         # 或直接写 key（优先级高于 api_key_env）
-#   base_url: "https://api.openai.com/v1"  # 兼容接口的地址
-#   model: "gpt-4o-mini"               # 模型名
+#   provider: "openai"                       # "openai" or "fake"
+#   api_key_env: "OPENAI_API_KEY"            # env var name for API key
+#   api_key: "sk-your-key-here"              # or set key directly (takes priority)
+#   base_url: "https://api.openai.com/v1"    # any OpenAI-compatible endpoint
+#   model: "gpt-4o-mini"
 #   temperature: 0.1
 #   max_tokens: 2000
+
+# Embedding config (optional, disables vector semantic search if not set)
+# embedding:
+#   provider: "openai"                       # "openai" | "fake" | omit to disable
+#   api_key: "ek-your-key-here"              # sk-... (OpenAI) or ek-... (electronhub relay)
+#   api_key_env: "OPENAI_API_KEY"            # lower priority than api_key
+#   base_url: "https://api.electronhub.ai/v1"  # any OpenAI-compatible endpoint
+#   model: "text-embedding-3-small"          # recommended for Chinese + English
+#   similarity_threshold: 0.35               # tuned for Chinese short text

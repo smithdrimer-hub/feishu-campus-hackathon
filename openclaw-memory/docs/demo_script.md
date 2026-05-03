@@ -86,6 +86,36 @@ Memory Engine 提取出以下结构化记忆：
 2. 展示 `golden_set.jsonl` 的 12 种场景
 3. 展示 `docs/evaluation_report.md` 的指标
 
+### 路径 C：混合搜索演示（2 分钟加分环节）
+
+**场景设定：** 系统中已有多条记忆（来自路径 A 的提取结果），现在展示搜索能力。
+
+**演示步骤：**
+
+1. 先展示关键词搜索的局限：
+   ```bash
+   # 搜索"风险" — 关键词只能找到字面匹配
+   python scripts/demo_hybrid_search.py --query "风险" --mode keyword
+   # 结果：（空或极少）— 因为没有记忆里字面包含"风险"
+   ```
+
+2. 再展示混合搜索的语义理解：
+   ```bash
+   # 同样搜索"风险" — 向量理解语义
+   python scripts/demo_hybrid_search.py --query "风险" --mode hybrid
+   # 结果：找到 blocker（"测试数据还没准备好"）+ deadline（"先做文档，测试延后"）
+   # 因为系统理解"风险"在项目管理中 = 阻塞 + 延期
+   ```
+
+3. 总结话术：
+   > "关键词搜索找到你说的，语义搜索找到你想说的。我们两者结合：精确匹配优先，语义补充召回。"
+
+**技术要点（评委追问时用）：**
+- 使用 OpenAI text-embedding-3-small 做中文语义向量化
+- ChromaDB 做本地向量存储，零运维
+- Reciprocal Rank Fusion 融合两路结果，关键词权重 70%、向量权重 30%
+- 没有 embedding API 时自动降级为纯关键词，不影响核心功能
+
 ## 当前限制（演示中必须诚实说明）
 - 当前使用关键词规则提取，不是真实 LLM。真实场景会接入 LLM。
 - 只处理群聊消息，文档/任务/会议数据源是 P1 计划。

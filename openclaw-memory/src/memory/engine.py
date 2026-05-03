@@ -32,6 +32,7 @@ class MemoryEngine:
         extractor: BaseExtractor | None = None,
         debounce_seconds: int = 60,
         adapter: Any = None,
+        vector_store: Any = None,
     ) -> None:
         """Create an engine with a store and extractor.
 
@@ -40,11 +41,13 @@ class MemoryEngine:
             extractor: 记忆提取器实例，默认为 RuleBasedExtractor
             debounce_seconds: Debounce 时间窗口（秒），默认 60 秒
             adapter: V1.8: LarkCliAdapter 实例，用于 sync_doc/sync_tasks
+            vector_store: VectorStore 实例，用于语义搜索（None = 禁用向量搜索）
         """
         self.store = store
         self.extractor = extractor or RuleBasedExtractor()
         self.debounce_seconds = debounce_seconds
         self.adapter = adapter
+        self.vector_store = vector_store
 
         # 记录每个 project 的最后处理时间
         # V1.11: 持久化到文件，重启后不丢失
@@ -124,6 +127,11 @@ class MemoryEngine:
 
         # 更新记忆存储（包含四层去重逻辑）
         result = self.store.upsert_items(new_items, processed_ids)
+
+        # V1.13: 同步到向量索引
+        if self.vector_store and getattr(self.vector_store, "available", False):
+            for item in result:
+                self.vector_store.index_item(item)
 
         # V1.12: 审计日志
         user = self._identity.get("open_id", "anonymous")
@@ -475,6 +483,37 @@ class MemoryEngine:
             project_id=project_id,
             as_of=as_of,
             top_k=top_k,
+        )
+
+    def search_hybrid(
+        self,
+        query: str,
+        project_id: str | None = None,
+        as_of: str | None = None,
+        top_k: int = 10,
+        keyword_weight: float = 0.7,
+    ) -> list[tuple[MemoryItem, float]]:
+        """V1.13: 混合搜索 — 关键词 + 向量语义融合。
+
+        如果 vector_store 不可用，自动降级为纯关键词搜索。
+
+        Args:
+            query: 搜索查询
+            project_id: 可选的项目 ID 过滤
+            as_of: 可选的时间点过滤
+            top_k: 最大结果数
+            keyword_weight: 关键词权重 (0-1)，向量权重 = 1 - keyword_weight
+
+        Returns:
+            (MemoryItem, fused_score) 列表，按混合相关度降序
+        """
+        return self.store.search_hybrid(
+            query=query,
+            project_id=project_id,
+            vector_store=self.vector_store,
+            top_k=top_k,
+            keyword_weight=keyword_weight,
+            as_of=as_of,
         )
 
     def _should_process_now(self, project_id: str | None) -> tuple[bool, str]:
