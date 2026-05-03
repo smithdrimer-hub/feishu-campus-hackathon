@@ -336,3 +336,36 @@ def _extract_doc_token(doc: str) -> str:
             token = token.split("?")[0].split("#")[0]
             return token.strip()
     return doc
+
+    # ── V1.13 日历/会议/审批 ───────────────────────────────────
+
+    def list_calendar_events(self, start: str, end: str) -> CliResult:
+        """V1.13: 查询日历日程。"""
+        return self.run(
+            ["calendar", "+agenda", "--start", start, "--end", end,
+             "--format", "json"],
+        )
+
+    def search_minutes(self, start: str, end: str, page_size: int = 10) -> CliResult:
+        """V1.13: 搜索会议纪要。"""
+        return self.run(
+            ["minutes", "+search", "--start", start, "--end", end,
+             "--page-size", str(page_size), "--format", "json"],
+        )
+
+    def get_minute_detail(self, minute_token: str) -> CliResult:
+        """V1.13: 获取单条会议纪要详情（含 summary, action_items）。"""
+        return self.run(
+            ["minutes", "minutes", "get", "--token", minute_token,
+             "--format", "json"],
+        )
+
+    def list_approval_instances(self, status: str = "pending",
+                                 page_size: int = 10) -> CliResult:
+        """V1.13: 查询审批实例列表。status: pending/approved/rejected。"""
+        import json
+        params = json.dumps({"status": status, "page_size": page_size})
+        return self.run(
+            ["approval", "instances", "initiated", "--as", "user",
+             "--params", params],
+        )

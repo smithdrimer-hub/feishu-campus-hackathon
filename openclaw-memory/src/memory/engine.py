@@ -457,6 +457,114 @@ class MemoryEngine:
         print(f"sync_tasks: 已拉取 {len(tasks)} 个任务")
         return self.ingest_events(task_events, debounce=False)
 
+    def sync_calendar(self, start: str, end: str,
+                       project_id: str = "default") -> list[MemoryItem]:
+        """V1.13: 同步飞书日历日程并提取记忆。"""
+        if self.adapter is None:
+            raise RuntimeError("sync_calendar requires adapter")
+        result = self.adapter.list_calendar_events(start, end)
+        if result.returncode != 0:
+            print(f"sync_calendar: failed: {result.stderr or result.stdout}")
+            return []
+        items = (result.data or {}).get("data", {}).get("items", []) or []
+        if not items:
+            print("sync_calendar: 未找到日程")
+            return []
+        events = []
+        for ev in items:
+            text = f"【日程】{ev.get('summary', '')}"
+            desc = ev.get("description", "")
+            if desc:
+                text += f"\n{desc[:500]}"
+            events.append({
+                "project_id": project_id, "chat_id": "",
+                "message_id": f"cal_{ev.get('event_id', '')}",
+                "text": text, "content": text,
+                "created_at": ev.get("start_time", utc_now_iso()),
+                "source_type": "calendar",
+                "sender": {"id": ev.get("organizer_id", ""),
+                           "sender_type": "calendar_sync"},
+            })
+        print(f"sync_calendar: {len(items)} 日程 → {len(events)} 事件")
+        return self.ingest_events(events, debounce=False)
+
+    def sync_minutes(self, start: str, end: str,
+                      project_id: str = "default") -> list[MemoryItem]:
+        """V1.13: 同步飞书会议纪要并提取记忆。
+
+        会议纪要是价值最高的数据源——飞书 AI 已生成总结和待办项。
+        """
+        if self.adapter is None:
+            raise RuntimeError("sync_minutes requires adapter")
+        result = self.adapter.search_minutes(start, end)
+        if result.returncode != 0:
+            print(f"sync_minutes: failed: {result.stderr or result.stdout}")
+            return []
+        minutes_list = (result.data or {}).get("data", {}).get(
+            "minutes", (result.data or {}).get("data", {}).get("items", []),
+        ) or []
+        if not minutes_list:
+            print("sync_minutes: 未找到会议纪要")
+            return []
+        events = []
+        for m in minutes_list[:10]:
+            token = m.get("token", "")
+            title = m.get("title", m.get("name", "未命名会议"))
+            detail = {}
+            if token:
+                dr = self.adapter.get_minute_detail(token)
+                if dr.returncode == 0:
+                    detail = (dr.data or {}).get("data", {})
+            text = f"【会议纪要】{title}"
+            summary = detail.get("summary", m.get("summary", ""))
+            if summary:
+                text += f"\n总结: {summary[:1000]}"
+            action_items = detail.get("action_items", []) or []
+            for ai in action_items[:5]:
+                text += f"\n待办: {ai.get('content','')} → {ai.get('assignee_name','')}"
+            events.append({
+                "project_id": project_id, "chat_id": "",
+                "message_id": f"minute_{token}",
+                "text": text[:2000], "content": text,
+                "created_at": m.get("create_time", utc_now_iso()),
+                "source_type": "meeting",
+                "sender": {"id": "minute_sync",
+                           "sender_type": "minute_sync"},
+            })
+        print(f"sync_minutes: {len(minutes_list)} 纪要 → {len(events)} 事件")
+        return self.ingest_events(events, debounce=False)
+
+    def sync_approvals(self, status: str = "pending",
+                        project_id: str = "default") -> list[MemoryItem]:
+        """V1.13: 同步飞书审批实例并提取记忆。
+
+        审批中 = blocker，已通过/拒绝 = decision。
+        """
+        if self.adapter is None:
+            raise RuntimeError("sync_approvals requires adapter")
+        result = self.adapter.list_approval_instances(status)
+        if result.returncode != 0:
+            print(f"sync_approvals: failed: {result.stderr or result.stdout}")
+            return []
+        items = (result.data or {}).get("data", {}).get("items", []) or []
+        if not items:
+            print(f"sync_approvals: 未找到 {status} 审批")
+            return []
+        events = []
+        for inst in items[:10]:
+            text = f"【审批】{inst.get('approval_name','')} — {inst.get('status',status)}"
+            events.append({
+                "project_id": project_id, "chat_id": "",
+                "message_id": f"approval_{inst.get('instance_id','')}",
+                "text": text, "content": text,
+                "created_at": inst.get("start_time", utc_now_iso()),
+                "source_type": "approval",
+                "sender": {"id": inst.get("applicant_id", ""),
+                           "sender_type": "approval_sync"},
+            })
+        print(f"sync_approvals: {len(items)} {status} → {len(events)} 事件")
+        return self.ingest_events(events, debounce=False)
+
     def search(
         self,
         query: str,

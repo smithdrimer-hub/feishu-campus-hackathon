@@ -47,6 +47,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--personal", default=None, help="发送个人上下文（形态 B），传入用户名")
     parser.add_argument("--doc-id", default=None, help="飞书文档 ID (doc_xxx)，同步文档数据源")
     parser.add_argument("--task-query", default=None, help="任务搜索关键词，同步任务数据源")
+    parser.add_argument("--sync-calendar", action="store_true", help="同步本周日历日程")
+    parser.add_argument("--sync-minutes", action="store_true", help="同步最近会议纪要")
+    parser.add_argument("--sync-approvals", action="store_true", help="同步进行中的审批")
     parser.add_argument("--identity", default="bot", help="消息发送身份: bot (默认) / user")
     return parser.parse_args()
 
@@ -206,7 +209,36 @@ def main() -> None:
         except RuntimeError as e:
             print(f"    任务同步失败: {e}\n")
 
-    if not args.doc_id and not args.task_query:
+    if args.sync_calendar:
+        from datetime import date, timedelta
+        today = date.today().isoformat()
+        week_end = (date.today() + timedelta(days=7)).isoformat()
+        print(f"[3/5] 同步日历: {today} ~ {week_end}")
+        try:
+            cal_items = engine.sync_calendar(today, week_end, project_id=args.project_id)
+            print(f"    日历提取到 {len(cal_items)} 条记忆\n")
+        except RuntimeError as e:
+            print(f"    日历同步失败: {e}\n")
+    if args.sync_minutes:
+        from datetime import date, timedelta
+        start = (date.today() - timedelta(days=30)).isoformat()
+        end = date.today().isoformat()
+        print(f"[3/5] 搜索会议纪要: {start} ~ {end}")
+        try:
+            min_items = engine.sync_minutes(start, end, project_id=args.project_id)
+            print(f"    纪要提取到 {len(min_items)} 条记忆\n")
+        except RuntimeError as e:
+            print(f"    纪要同步失败: {e}\n")
+    if args.sync_approvals:
+        print(f"[3/5] 同步进行中的审批")
+        try:
+            app_items = engine.sync_approvals("pending", project_id=args.project_id)
+            print(f"    审批提取到 {len(app_items)} 条记忆\n")
+        except RuntimeError as e:
+            print(f"    审批同步失败: {e}\n")
+
+    if not any([args.doc_id, args.task_query, args.sync_calendar,
+                args.sync_minutes, args.sync_approvals]):
         print("[3/5] (无额外数据源)\n")
 
     # 重新获取最新 items（可能包含文档/任务新增的）
