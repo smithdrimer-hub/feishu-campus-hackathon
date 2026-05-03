@@ -171,6 +171,7 @@ llm:
 5. **LLM 无法引用跨批次消息**：valid_message_ids 只包含当前批次，多轮对话证据可能不完整
 6. **JSON 文件存储**：`list_items()` 全量 `json.loads` 后内存过滤，单用户 < 10K 条够用。已支持 `limit`/`offset` 分页。大规模需换 SQLite
 7. **单用户 CLI 工具**：零线程安全、无文件锁。多进程并发写入会损坏 `memory_state.json`
+8. **Hybrid 延迟未基准化**：LLM 调用每次 1-3s（DeepSeek V4 Pro），无 benchmark。大量消息建议 RuleOnly 或批处理
 
 ## 路线图
 
