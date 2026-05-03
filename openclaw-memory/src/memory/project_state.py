@@ -548,17 +548,36 @@ def render_personal_context_text(ctx: dict[str, Any]) -> str:
 def build_cross_project_context(
     owner_name: str,
     project_items: dict[str, list[MemoryItem]],
+    requester_name: str = "",
+    requester_open_id: str = "",
+    supervisor_ids: frozenset | None = None,
 ) -> dict[str, Any]:
     """聚合用户在所有项目中的任务、阻塞、截止日期。
 
+    V1.13: 增加权限校验。仅用户本人或上级可查看。
+
     Args:
-        owner_name: 用户姓名（如 "张三"），支持模糊匹配。
-        project_items: {project_id: [MemoryItem, ...]} 多个项目的数据。
+        owner_name: 目标用户姓名（如 "张三"）。
+        project_items: {project_id: [MemoryItem, ...]}。
+        requester_name: 请求者姓名，空字符串表示跳过校验（仅 Demo）。
+        requester_open_id: 请求者 open_id，优先于 name 匹配。
+        supervisor_ids: 上级 open_id 白名单（None = 无上级）。
 
     Returns:
-        {"projects": {pid: {"tasks": [...], "blockers": [...], "deadlines": [...]}}}
+        {"user": ..., "projects": {...}} 或 {"user": ..., "projects": {}, "denied": True}
     """
     result: dict[str, Any] = {"user": owner_name, "projects": {}}
+
+    # V1.13: 权限校验 — 仅本人或上级可查看
+    if requester_name and requester_name != owner_name:
+        is_supervisor = (
+            supervisor_ids and requester_open_id and
+            requester_open_id in supervisor_ids
+        )
+        if not is_supervisor:
+            result["denied"] = True
+            result["reason"] = f"仅用户本人或上级可查看 {owner_name} 的跨项目状态"
+            return result
 
     for pid, items in project_items.items():
         user_tasks = []
