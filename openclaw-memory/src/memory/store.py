@@ -386,12 +386,14 @@ class MemoryStore:
 
     def list_items(self, project_id: str | None = None,
                    as_of: str | None = None,
-                   user_id: str | None = None) -> list[MemoryItem]:
-        """Return active memory items, optionally filtered.
+                   user_id: str | None = None,
+                   limit: int = 0, offset: int = 0) -> list[MemoryItem]:
+        """Return active memory items, optionally filtered and paginated.
 
-        V1.12: 增加 user_id 参数，按用户身份过滤记忆（AUTH-4）。
-        过滤逻辑：记忆的 source_refs 中 sender_id 匹配 user_id 的返回。
-        user_id=None 时不过滤（兼容旧行为）。
+        V1.12: 增加 user_id 参数。V1.13: 增加 limit/offset 分页。
+
+        注意：当前实现全量加载 memory_state.json 后在内存中过滤。
+        单用户 CLI 场景下（< 10K 条记忆）够用。大规模部署需换 SQLite/PostgreSQL。
         """
         state = self.load_state()
         items = [MemoryItem.from_dict(item) for item in state.get("items", [])]
@@ -404,7 +406,19 @@ class MemoryStore:
                 item for item in items
                 if any(ref.sender_id == user_id for ref in item.source_refs)
             ]
+        if offset > 0:
+            items = items[offset:]
+        if limit > 0:
+            items = items[:limit]
         return items
+
+    def count_items(self, project_id: str | None = None) -> int:
+        """V1.13: 返回活跃记忆数量（不走全量 list_items）。"""
+        state = self.load_state()
+        items = state.get("items", [])
+        if project_id is not None:
+            return sum(1 for item in items if item.get("project_id") == project_id)
+        return len(items)
 
     @staticmethod
     def _parse_iso_as_utc(t: str) -> datetime | None:

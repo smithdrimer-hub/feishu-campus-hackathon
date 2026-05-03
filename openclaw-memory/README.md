@@ -169,6 +169,8 @@ llm:
 3. **复杂消息类型覆盖不足**：post 消息已验证，image/file/share_chat 等类型未覆盖
 4. **权限隔离基于 project_id 软隔离**：无真实飞书 OAuth/open_id 校验（Demo 场景不涉及）
 5. **LLM 无法引用跨批次消息**：valid_message_ids 只包含当前批次，多轮对话证据可能不完整
+6. **JSON 文件存储**：`list_items()` 全量 `json.loads` 后内存过滤，单用户 < 10K 条够用。已支持 `limit`/`offset` 分页。大规模需换 SQLite
+7. **单用户 CLI 工具**：零线程安全、无文件锁。多进程并发写入会损坏 `memory_state.json`
 
 ## 路线图
 

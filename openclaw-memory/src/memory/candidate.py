@@ -237,11 +237,12 @@ def _extract_tokens(text: str) -> set[str]:
         "进行", "通过", "大家", "我们", "他们",
     })
     tokens: set[str] = set()
-    # 中文 2-gram（固定 2 字，保证短 excerpt 和长原文的 token 能匹配）
-    for m in re.finditer(r"[一-鿿]{2}", text):
-        w = m.group()
-        if w not in _stop:
-            tokens.add(w)
+    # 中文 2-gram（使用滑动窗口 + 前瞻断言，确保重叠匹配）
+    for i in range(len(text) - 1):
+        w = text[i:i+2]
+        if len(w) == 2 and all('一' <= c <= '鿿' or '一' <= c <= '鿿' for c in w):
+            if w not in _stop:
+                tokens.add(w)
     # 英文词 3+ 字母（V1.12 REAL-3: 同义词归一化）
     _synonyms = {
         "switch": "change", "migrate": "change", "move": "change",
