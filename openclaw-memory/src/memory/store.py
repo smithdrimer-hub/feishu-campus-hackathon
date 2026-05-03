@@ -632,6 +632,9 @@ class MemoryStore:
 
             # V1.11 Layer 4: 跨 key 决策/截止日期覆盖
             # 不同 key 但同主题 → 覆盖旧条目
+            # 注意：_is_same_topic 是基于共享关键词+bigram相似度的启发式方法，
+            # 非语义理解。对同义词（switch/migrate）、隐式关联（"提高性能"
+            # vs "优化数据库"）可能漏判。生产环境可升级为 embedding 语义判断。
             if old_item is None and new_item.state_type in ("decision", "deadline"):
                 for existing in list(items):
                     if existing.state_type != new_item.state_type:
@@ -738,9 +741,17 @@ class MemoryStore:
 
     @staticmethod
     def _is_same_topic(text1: str, text2: str, state_type: str = "decision") -> bool:
-        """V1.11: 判断两个同类型条目是否属于同一主题（应触发跨 key 覆盖）。
+        """V1.11: 判断两个同类型条目是否属同一主题（应触发跨 key 覆盖）。
 
-        支持 decision 和 deadline。
+        方法：基于共享关键词（中文 2-4 字 token + 英文词）+ bigram 字符相似度。
+        支持 decision 和 deadline（含日期词重叠检测）。
+
+        已知局限：
+        - 关键词重叠是启发式，非语义理解。同义词（switch/migrate）、隐式关联
+          （"优化性能" vs "数据库太慢"）无法识别。
+        - 停用词列表是手工维护的，新领域可能需要调整。
+        - 纯英文短文本 token 少，容易漏判。
+        - 生产环境可升级为 embedding 余弦相似度（VectorStore 已就绪）。
         """
         import re
 
