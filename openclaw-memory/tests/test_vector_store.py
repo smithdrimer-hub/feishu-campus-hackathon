@@ -53,7 +53,7 @@ class TestVectorStoreBasic(unittest.TestCase):
     """Test VectorStore index/search/remove operations."""
 
     def setUp(self):
-        self.temp_dir = TemporaryDirectory()
+        self.temp_dir = TemporaryDirectory(ignore_cleanup_errors=True)
         self.provider = FakeEmbeddingProvider(dimension=128)
         try:
             from memory.vector_store import VectorStore
@@ -67,6 +67,10 @@ class TestVectorStoreBasic(unittest.TestCase):
             self.skip_chromadb = True
 
     def tearDown(self):
+        if hasattr(self, "vs") and self.vs.available:
+            self.vs.close()
+        if hasattr(self, "engine_vs"):
+            self.engine_vs.close()
         self.temp_dir.cleanup()
 
     def test_index_and_search(self):
@@ -199,7 +203,7 @@ class TestHybridSearch(unittest.TestCase):
     """Test the search_hybrid method in MemoryStore."""
 
     def setUp(self):
-        self.temp_dir = TemporaryDirectory()
+        self.temp_dir = TemporaryDirectory(ignore_cleanup_errors=True)
         self.data_dir = Path(self.temp_dir.name)
         self.provider = FakeEmbeddingProvider(dimension=128)
 
@@ -218,6 +222,10 @@ class TestHybridSearch(unittest.TestCase):
             self.skip_chromadb = True
 
     def tearDown(self):
+        if hasattr(self, "vs") and self.vs.available:
+            self.vs.close()
+        if hasattr(self, "engine_vs"):
+            self.engine_vs.close()
         self.temp_dir.cleanup()
 
     def test_hybrid_fallback_to_keyword_when_no_vector_store(self):

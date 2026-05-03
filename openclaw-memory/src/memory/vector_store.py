@@ -53,7 +53,13 @@ class VectorStore:
             chroma_dir = self.data_dir / "chroma"
             chroma_dir.mkdir(parents=True, exist_ok=True)
 
-            self._client = chromadb.PersistentClient(path=str(chroma_dir))
+            settings = chromadb.Settings(
+                anonymized_telemetry=False,
+                allow_reset=True,
+            )
+            self._client = chromadb.PersistentClient(
+                path=str(chroma_dir), settings=settings,
+            )
             self._memories_col = self._client.get_or_create_collection(
                 name="memories",
                 metadata={"hnsw:space": "cosine"},
@@ -73,6 +79,30 @@ class VectorStore:
     def available(self) -> bool:
         """Whether vector search is operational."""
         return self._available
+
+    def close(self) -> None:
+        """V1.13: 释放 ChromaDB 资源，关闭 SQLite 连接。
+
+        必须在 VectorStore 不再使用时调用，否则 Windows 上文件锁会阻止删除。
+        """
+        if not self._available:
+            return
+        try:
+            # 删除 collection 引用释放底层 SQLite 连接
+            if self._memories_col is not None:
+                del self._memories_col
+            if self._evidence_col is not None:
+                del self._evidence_col
+            # 尝试停止 ChromaDB 系统线程
+            if hasattr(self._client, "_system"):
+                self._client._system.stop()
+            del self._client
+            self._available = False
+        except Exception:
+            pass
+        # 强制 GC 释放可能残留的文件句柄
+        import gc
+        gc.collect()
 
     def index_item(self, item: "MemoryItem") -> None:
         """Index or update a single MemoryItem in both collections."""
