@@ -171,7 +171,7 @@ llm:
 5. **LLM 无法引用跨批次消息**：valid_message_ids 只包含当前批次，多轮对话证据可能不完整
 6. **JSON 文件存储**：`list_items()` 全量 `json.loads` 后内存过滤，单用户 < 10K 条够用。已支持 `limit`/`offset` 分页。大规模需换 SQLite
 7. **单用户 CLI 工具**：零线程安全、无文件锁。多进程并发写入会损坏 `memory_state.json`
-8. **Hybrid 延迟未基准化**：LLM 调用每次 1-3s（DeepSeek V4 Pro），无 benchmark。大量消息建议 RuleOnly 或批处理
+8. **Hybrid 延迟较高**：RuleOnly ~4ms/条，Hybrid ~6s/条（DeepSeek V4 Pro，含 LLM API 调用）。10 条消息 RuleOnly 0.04s，Hybrid ~60s。大量消息建议 RuleOnly 或批处理。运行 `python scripts/demo_benchmark.py` 获取当前环境实测值
 
 ## 路线图
 
