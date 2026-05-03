@@ -243,6 +243,71 @@ class MemoryStore:
         items.sort(key=lambda x: x.updated_at, reverse=True)
         return [(item, 1.0) for item in items[:top_k]]
 
+    def search_hybrid(
+        self,
+        query: str,
+        project_id: str | None = None,
+        vector_store: Any = None,
+        top_k: int = 10,
+        keyword_weight: float = 0.7,
+        as_of: str | None = None,
+    ) -> list[tuple[MemoryItem, float]]:
+        """Hybrid search: keyword scoring + vector semantic reranking via RRF.
+
+        Combines keyword search (precise, deterministic) with vector search
+        (semantic understanding). Uses Reciprocal Rank Fusion to merge results.
+
+        Args:
+            query: Search query string.
+            project_id: Optional project filter.
+            vector_store: VectorStore instance (None = keyword-only fallback).
+            top_k: Max results to return.
+            keyword_weight: Weight for keyword scores (0-1). Vector weight = 1 - keyword_weight.
+            as_of: Optional temporal filter.
+
+        Returns:
+            (MemoryItem, fused_score) tuples, descending by score.
+        """
+        kw_results = self.search_keywords(query, project_id, as_of=as_of, top_k=top_k * 3)
+
+        if vector_store is None or not getattr(vector_store, "available", False):
+            return kw_results[:top_k]
+
+        vec_results = vector_store.search(query, project_id=project_id, top_k=top_k * 3)
+
+        if not vec_results:
+            return kw_results[:top_k]
+
+        items_by_id = {}
+        for item, _score in kw_results:
+            items_by_id[item.memory_id] = item
+
+        all_items = self.list_items(project_id, as_of=as_of)
+        for item in all_items:
+            if item.memory_id not in items_by_id:
+                items_by_id[item.memory_id] = item
+
+        k_rrf = 60
+        fused_scores: dict[str, float] = {}
+
+        for rank, (item, _score) in enumerate(kw_results):
+            rrf = 1.0 / (k_rrf + rank + 1)
+            fused_scores[item.memory_id] = fused_scores.get(item.memory_id, 0) + keyword_weight * rrf
+
+        vector_weight = 1.0 - keyword_weight
+        for rank, (memory_id, _sim) in enumerate(vec_results):
+            rrf = 1.0 / (k_rrf + rank + 1)
+            fused_scores[memory_id] = fused_scores.get(memory_id, 0) + vector_weight * rrf
+
+        ranked = sorted(fused_scores.items(), key=lambda x: x[1], reverse=True)
+
+        results = []
+        for memory_id, score in ranked[:top_k]:
+            if memory_id in items_by_id:
+                results.append((items_by_id[memory_id], score))
+
+        return results
+
     @staticmethod
     def _tokenize_query(query: str) -> list[str]:
         """V1.9: 将搜索查询拆分为独立的搜索词。

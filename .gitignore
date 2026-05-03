@@ -1,6 +1,10 @@
 # 敏感配置
 openclaw-memory/config.local.yaml
 
+# Python 虚拟环境
+openclaw-memory/.venv/
+.venv/
+
 # 运行时数据
 openclaw-memory/data/raw_events.jsonl
 openclaw-memory/data/memory_state.json
