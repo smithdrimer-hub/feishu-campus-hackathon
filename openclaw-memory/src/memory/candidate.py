@@ -1,12 +1,11 @@
 """Validated LLM candidate schema for trusted Memory extraction.
 
-V1.12 FIX-11: excerpt 验证从子串匹配升级为 difflib 模糊匹配。
+V1.12 FIX-11: excerpt 验证升级为 token 重叠模糊匹配（共享 2-gram ≥ 2 即通过）。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from difflib import SequenceMatcher
 from typing import Any, Iterable
 
 from memory.schema import MemoryItem, SourceRef
@@ -187,19 +186,12 @@ def _validate_source_refs(
 
 
 def _excerpt_matches(excerpt: str, source_text: str, threshold: float = 0.25) -> bool:
-    """V1.12 FIX-11 real: 基于共享 token 的 excerpt 验证。
+    """检查 excerpt 是否源自原文（token 重叠模糊匹配）。
 
-    提取中文词（2-4字）和英文词，计算共享 token 的 Jaccard 相似度。
-    比字符级 SequenceMatcher 更鲁棒——"负责人改为张三" 和 "换成张三负责"
-    共享 token {负责人, 张三, 负责/换成}，相似度 0.3+。
-
-    Args:
-        excerpt: LLM 返回的节选文本。
-        source_text: 原始消息文本。
-        threshold: token 级 Jaccard 相似度阈值（0-1），默认 0.25。
-
-    Returns:
-        True 如果 excerpt 与原文的共享 token 足够多。
+    提取中文 2-gram + 英文词 token，共享 ≥2 即判定为原文派生。
+    比子串匹配（`excerpt in source_text`）更能容忍 LLM 改写（加字/减字/换序），
+    比字符级 SequenceMatcher 更适合中文（不受字符位置偏移影响）。
+    同义词覆盖由 _extract_tokens 内的同义词词典辅助。
     """
     if not excerpt or not source_text:
         return False
