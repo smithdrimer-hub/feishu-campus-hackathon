@@ -535,6 +535,30 @@ class MemoryStore:
                         if by_key.get(old_key) is existing:
                             del by_key[old_key]
 
+                        # V1.12 REAL-2: 传递闭包
+                        # d1="用React" → d2="换Vue"(孤立) → d3="还是React"
+                        # d3 覆盖 d1 时，d2 与两者均无关联 → 被跳过 → 一并覆盖
+                        for middle in list(items):
+                            if middle.state_type != new_item.state_type:
+                                continue
+                            if middle.project_id != new_item.project_id:
+                                continue
+                            if middle.memory_id in (existing.memory_id, new_item.memory_id):
+                                continue
+                            # 中间项与旧/新均无关联 → 已被跳过的孤立决策
+                            linked_to_old = self._is_same_topic(
+                                middle.current_value, existing.current_value, new_item.state_type)
+                            linked_to_new = self._is_same_topic(
+                                middle.current_value, new_item.current_value, new_item.state_type)
+                            if not linked_to_old and not linked_to_new:
+                                if middle.valid_to is None:
+                                    middle.valid_to = utc_now_iso()
+                                history.append(middle)
+                                items = [i for i in items if i.memory_id != middle.memory_id]
+                                mk = middle.identity_key()
+                                if by_key.get(mk) is middle:
+                                    del by_key[mk]
+
             # 插入新记忆
             by_key[new_item.identity_key()] = new_item
             items.append(new_item)
@@ -662,6 +686,9 @@ class MemoryStore:
         if len(shared) >= 2:
             return True
         if bigram_sim > 0.4:
+            return True
+        # V1.12 REAL-2: 1 个共享 token + 中等相似度 → 同主题
+        if len(shared) >= 1 and bigram_sim > 0.25:
             return True
         return False
 

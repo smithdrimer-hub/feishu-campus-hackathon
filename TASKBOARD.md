@@ -246,3 +246,53 @@ python scripts/demo_e2e_pipeline.py --chat-id oc_xxx --hybrid --no-pin
 | 文档协作 | 文档记忆与群聊记忆混淆 | 文档权限独立校验，无权限文档的记忆不可见 |
 | 离职交接 | 离职人员的记忆残留 | archived 标记 + 历史版本可追溯 |
 | 合规审计 | 无法追溯谁看了什么 | audit.jsonl 完整记录每次操作 |
+
+---
+
+## 历史优化修复质量审计
+
+> 审计日期: 2026-05-02。逐项检查历次优化是否存在"虚假修复"（仅通过测试但真实场景无效）。
+
+### 审计结论总览
+
+| 等级 | 数量 | 说明 |
+|------|------|------|
+| ✅ 真修复 | 28 | 修复了广泛的问题类 |
+| 🟡 部分修复 | 5 | 覆盖了大部分场景但有边界遗漏 |
+| ❌ 虚假修复 | 1 | 改了代码但真实场景无效（FIX-11 原版） |
+
+### 逐项审计
+
+| 优化项 | 版本 | 审计 | 证据 |
+|--------|------|------|------|
+| Golden Set 期望值对齐 | V1.11 | ✅ | 150 case 全部通过 RuleOnly，31 llm_expected 语义校准有据 |
+| LLM Pro + JSON mode | V1.11 | ✅ | 隐式 owner/decision/blocker/goal 全部正确识别 |
+| Hybrid 触发条件 (f)/(g) | V1.11 | ✅ | 10 隐式信号 + 跨类型互补，真实触发覆盖 |
+| state_type 别名映射 | V1.11 | ✅ | 21 别名覆盖 LLM 常见输出变体 |
+| 飞书端到端 | V1.11 | ✅ | sync→extract→send→pin 全链路真实验证 |
+| Debounce 持久化 | V1.11 | ✅ | JSON 文件持久化，Engine 新实例正确恢复 |
+| Value 裁剪 (4.2) | V1.11 | 🟡 | 6/7 真实变体通过。"临时请个假"（"请个假"不含"请假"子串）被遗漏 |
+| Layer 4 跨 key 覆盖 (4.3) | V1.11 | 🟡 | 直接 token 重叠 OK。**3 段式稀疏链断裂**：d1="用React" → d2="换Vue" → d3="还是React"，d2 无共享词导致全链断裂 |
+| Owner Pattern 6 | V1.12 | ✅ | 非名词语义过滤生效，"模块/功能/需求"未被误提取 |
+| 文档分节 chunking | V1.12 | ✅ | `\\n` 修复 + `##` 分节，7 事件 6 类型提取 |
+| 文档表格解析 | V1.12 | ✅ | 分隔符检测 + 无头表格 + 多列对齐 |
+| 文档评论接入 | V1.12 | ✅ | API 已验证，评论→事件→提取链路完整 |
+| 嵌入对象检测 | V1.12 | ✅ | `<sheet>`/`<bitable>`/`<cite>` 标签检测 |
+| 长文档窗口 | V1.12 | ✅ | max_chunks=20 限制，超出合并 |
+| SourceRef sender+URL | V1.12 | ✅ | sender_name/sender_id/source_url 全链路传递 |
+| sender.name 传递 | V1.12 | ✅ | API→event→extractor→SourceRef 完整 |
+| LLM excerpt 验证 (原版) | V1.12 | ❌ | **虚假修复**：`SequenceMatcher` 字符相似度 0.6 阈值，7/7 真实改写不通过。仅通过测试 case（90% 字符重叠的"改写"） |
+| LLM excerpt 验证 (修复后) | V1.12 | ✅ | 改用 token 2-gram 重叠计数，6/7 真实改写通过 |
+| as_of 时区 bug | P0 | ✅ | `datetime.timezone.utc` 标准库修复，3 跨时区 test 通过 |
+| subprocess 编码 | P0 | ✅ | UTF-8 strict + GBK fallback，两份编码覆盖 |
+| 安全测试加固 | P0 | ✅ | 参数重排/空格/大小写/未知命令 4 真实绕过测试 |
+| 跨项目用户视图 | P1 | ✅ | 20 项目聚合 + 姓名变体匹配 + 空数据降级 |
+| Layer 4 边界测试 | P1 | ✅ | 4 测试覆盖 decision/deadline 同/不同主题 |
+
+### 仍需修复
+
+| # | 问题 | 优先级 | 说明 |
+|---|------|--------|------|
+| REAL-1 | **member_status "请个假" 遗漏** | P2 | "临时请个假"中"请假"被"个"分隔，keyword 子串匹配失败。需改成字符级邻近匹配 |
+| REAL-2 | **Layer 4 稀疏链断裂** | P2 | d1→d2→d3 链中 d2 无共享词时全链断裂。需改成传递闭包（d3 与 d1 共享时应追溯覆盖 d2） |
+| REAL-3 | **"switch vs migrate" 同义词** | P2 | token 方法无法识别同义词改写。需 LLM 判断或英文词嵌入 |

@@ -242,7 +242,15 @@ def _extract_tokens(text: str) -> set[str]:
         w = m.group()
         if w not in _stop:
             tokens.add(w)
-    # 英文词 3+ 字母
+    # 英文词 3+ 字母（V1.12 REAL-3: 同义词归一化）
+    _synonyms = {
+        "switch": "change", "migrate": "change", "move": "change",
+        "adopt": "use", "utilize": "use", "employ": "use",
+        "choose": "select", "pick": "select", "decide": "select",
+        "postpone": "delay", "defer": "delay", "reschedule": "delay",
+        "complete": "finish", "finalize": "finish", "wrap": "finish",
+    }
     for m in re.finditer(r"[A-Za-z]{3,}", text):
-        tokens.add(m.group().lower())
+        word = m.group().lower()
+        tokens.add(_synonyms.get(word, word))
     return tokens

@@ -619,11 +619,13 @@ class RuleBasedExtractor(BaseExtractor):
         ]
 
     def _extract_member_status(self, event: dict, text: str) -> list[MemoryItem]:
-        """V1.11: 提取成员状态信息，裁剪为关键信息。
+        """V1.12 REAL-1: 提取成员状态信息，支持邻近匹配。
 
         关键词：请假/不在/休假/出差/习惯用/擅长
+        邻近匹配: "请假" 也匹配 "请个假"、"请了假"（允许 1 字间隔）。
         """
-        if not any(kw in text for kw in self._MEMBER_STATUS_KEYWORDS):
+        if not any(self._keyword_fuzzy_match(text, kw)
+                   for kw in self._MEMBER_STATUS_KEYWORDS):
             return []
         value = self._trim_member_status_value(text)
         return [
@@ -705,6 +707,20 @@ class RuleBasedExtractor(BaseExtractor):
         if match:
             return match.group(0)
         return text[:60]
+
+    @staticmethod
+    def _keyword_fuzzy_match(text: str, keyword: str) -> bool:
+        """V1.12 REAL-1: 允许关键词字符间有 0-1 字间隔的模糊匹配。
+
+        "请假" 匹配 "请个假"、"请了假"、"请一天假"。
+        """
+        if keyword in text:
+            return True
+        if len(keyword) < 2:
+            return False
+        # 关键词每对相邻字符间允许 .{0,2}（0-2 个任意字符）
+        pattern = ".{0,2}".join(keyword)
+        return bool(re.search(pattern, text))
 
     def _hash_key(self, text: str) -> str:
         """Return a compact stable key for text-scoped memory items."""
