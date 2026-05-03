@@ -196,12 +196,34 @@ class MemoryStore:
         message_id: str | None = None,
         as_of: str | None = None,
         top_k: int = 20,
+        use_semantic: bool = False,
+        vector_store: Any = None,
     ) -> list[tuple[MemoryItem, float]]:
-        """V1.12: 多条件组合搜索。
+        """V1.12: 多条件组合搜索。V1.13 OPT-4: 支持语义搜索模式。
 
         所有条件 AND 组合。不传的条件不过滤。
-        关键词匹配 current_value/rationale/source_refs.excerpt。
+        use_semantic=True 时走混合搜索（需 vector_store）。
         """
+        # V1.13 OPT-4: 语义搜索路径
+        if use_semantic and keyword and vector_store is not None:
+            hybrid_results = self.search_hybrid(
+                query=keyword, project_id=project_id, vector_store=vector_store,
+                top_k=top_k, as_of=as_of,
+            )
+            # 应用额外结构化过滤
+            filtered = []
+            for item, score in hybrid_results:
+                if state_type and item.state_type != state_type:
+                    continue
+                if owner and owner not in (item.owner or ""):
+                    continue
+                if message_id and not any(
+                    ref.message_id == message_id for ref in item.source_refs
+                ):
+                    continue
+                filtered.append((item, score))
+            return filtered[:top_k]
+
         items = self.list_items(project_id, as_of=as_of)
 
         # 按 message_id 过滤
@@ -273,10 +295,26 @@ class MemoryStore:
         if vector_store is None or not getattr(vector_store, "available", False):
             return kw_results[:top_k]
 
+        # V1.13 OPT-1: 同时查 memories + evidence 两个 collection
         vec_results = vector_store.search(query, project_id=project_id, top_k=top_k * 3)
+        ev_results = vector_store.search_evidence(query, project_id=project_id, top_k=top_k * 3)
+
+        # 合并 evidence 结果中的 memory_id（去重，取最大相似度）
+        vec_scores: dict[str, float] = {mid: sim for mid, sim in vec_results}
+        for memory_id, sim, _excerpt in ev_results:
+            if memory_id not in vec_scores or sim > vec_scores[memory_id]:
+                vec_scores[memory_id] = sim
+        vec_results = list(vec_scores.items())
 
         if not vec_results:
             return kw_results[:top_k]
+
+        # V1.13 OPT-3: 自适应权重
+        if not kw_results:
+            keyword_weight = 0.3  # 关键词找不到 → 向量主导
+            vec_top_k = top_k      # 不扩增候选
+        else:
+            vec_top_k = top_k * 3
 
         items_by_id = {}
         for item, _score in kw_results:

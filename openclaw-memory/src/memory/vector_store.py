@@ -176,8 +176,12 @@ class VectorStore:
         query: str,
         project_id: str | None = None,
         top_k: int = 10,
+        state_type: str | None = None,
+        owner: str | None = None,
     ) -> list[tuple[str, float]]:
         """Semantic search over memory items.
+
+        V1.13 OPT-2: 支持 state_type/owner 结构化过滤。
 
         Returns:
             List of (memory_id, similarity_score) tuples, descending by score.
@@ -188,9 +192,7 @@ class VectorStore:
         try:
             query_embedding = self.embedding_provider.embed_single(query)
 
-            where_filter = None
-            if project_id:
-                where_filter = {"project_id": project_id}
+            where_filter = self._build_filter(project_id, state_type, owner)
 
             results = self._memories_col.query(
                 query_embeddings=[query_embedding],
@@ -220,8 +222,12 @@ class VectorStore:
         query: str,
         project_id: str | None = None,
         top_k: int = 20,
+        state_type: str | None = None,
+        owner: str | None = None,
     ) -> list[tuple[str, float, str]]:
         """Semantic search over evidence excerpts.
+
+        V1.13 OPT-2: 支持 state_type/owner 结构化过滤。
 
         Returns:
             List of (memory_id, similarity_score, excerpt) tuples.
@@ -232,9 +238,7 @@ class VectorStore:
         try:
             query_embedding = self.embedding_provider.embed_single(query)
 
-            where_filter = None
-            if project_id:
-                where_filter = {"project_id": project_id}
+            where_filter = self._build_filter(project_id, state_type, owner)
 
             results = self._evidence_col.query(
                 query_embeddings=[query_embedding],
@@ -281,6 +285,29 @@ class VectorStore:
             return 0
 
         return self.index_items(items)
+
+    @staticmethod
+    def _build_filter(
+        project_id: str | None = None,
+        state_type: str | None = None,
+        owner: str | None = None,
+    ) -> dict | None:
+        """V1.13 OPT-2: 构建 ChromaDB where 过滤条件。
+
+        ChromaDB 多条件需用 $and 包裹。
+        """
+        conditions = []
+        if project_id:
+            conditions.append({"project_id": project_id})
+        if state_type:
+            conditions.append({"state_type": state_type})
+        if owner:
+            conditions.append({"owner": owner})
+        if not conditions:
+            return None
+        if len(conditions) == 1:
+            return conditions[0]
+        return {"$and": conditions}
 
     def stats(self) -> dict[str, Any]:
         """Return current index statistics."""
