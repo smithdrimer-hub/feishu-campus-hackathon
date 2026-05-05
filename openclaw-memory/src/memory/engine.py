@@ -58,6 +58,10 @@ class MemoryEngine:
         self._identity: dict[str, str] = {}
         self._chat_project_map: dict[str, str] = {}
         self._load_identity_state()
+        # V1.15: 累积 diff（多次 sync 操作合并，供触发引擎使用）
+        self.last_diff: dict[str, list] = {
+            "created": [], "updated": [], "unchanged": [], "conflicts": [],
+        }
 
     def ingest_events(self, events: list[dict], debounce: bool = True) -> list[MemoryItem]:
         """Append raw events, process new events with optional debounce.
@@ -79,14 +83,7 @@ class MemoryEngine:
     ) -> list[MemoryItem]:
         """Extract memory from unprocessed raw events with coalescing debounce.
 
-        V1.5 改进：Coalescing debounce 逻辑
-        - 检查是否在 debounce 窗口内
-        - 如果在窗口内，跳过处理（事件已 append 到文件，等待下次非 debounce 时处理）
-        - 如果不在窗口内，正常处理所有未处理事件
-
-        注意：当前实现是安全的 coalescing，不是真正的异步 trailing-edge debounce。
-        debounce 跳过的事件不会被标记为 processed，因此后续非 debounce 调用仍会处理。
-        生产环境需要后台调度器来确保 debounce 窗口结束后自动触发处理。
+        V1.14: Also stores the upsert diff in self.last_diff for trigger engine.
 
         Args:
             project_id: 项目 ID，用于过滤事件
@@ -95,17 +92,13 @@ class MemoryEngine:
         Returns:
             活跃记忆项列表
         """
-        # === Debounce 检查 ===
+        empty_diff = {"created": [], "updated": [], "unchanged": [], "conflicts": []}
+
         if debounce:
             should_process, delay_reason = self._should_process_now(project_id)
-
             if not should_process:
-                # 在 debounce 窗口内，跳过处理
-                # 新事件已通过 append_raw_events 写入文件且未被标记为 processed
-                # 等待下次非 debounce 或窗口结束后再处理
                 return self.store.list_items(project_id)
 
-        # === 正常处理流程 ===
         processed = set(self.store.processed_event_ids())
         events = [
             event
@@ -116,24 +109,22 @@ class MemoryEngine:
         if not events:
             return self.store.list_items(project_id)
 
-        # 使用 LLM 或规则提取器提取记忆
         new_items = self.extractor.extract(events)
         processed_ids = [raw_event_id(event) for event in events]
 
         if not new_items:
-            # 没有提取到记忆，标记为已处理
             self.store.mark_processed(processed_ids)
             return self.store.list_items(project_id)
 
-        # 更新记忆存储（包含四层去重逻辑）
-        result = self.store.upsert_items(new_items, processed_ids)
+        result, diff = self.store.upsert_items(new_items, processed_ids)
+        # V1.15: 累积 diff（合并多次 sync 操作）
+        for key in ("created", "updated", "unchanged", "conflicts"):
+            self.last_diff[key].extend(diff.get(key, []))
 
-        # V1.13: 同步到向量索引
         if self.vector_store and getattr(self.vector_store, "available", False):
             for item in result:
                 self.vector_store.index_item(item)
 
-        # V1.12: 审计日志
         user = self._identity.get("open_id", "anonymous")
         for item in new_items:
             self.store.audit_log(
@@ -143,7 +134,6 @@ class MemoryEngine:
                 detail=f"extracted: {item.current_value[:80]}",
             )
 
-        # === 更新最后处理时间 ===
         self._set_last_process_time(project_id, datetime.now())
 
         return result
@@ -466,7 +456,12 @@ class MemoryEngine:
         if result.returncode != 0:
             print(f"sync_calendar: failed: {result.stderr or result.stdout}")
             return []
-        items = (result.data or {}).get("data", {}).get("items", []) or []
+        raw = result.data or {}
+        if isinstance(raw, list):
+            items = raw
+        else:
+            inner = raw.get("data", raw)
+            items = inner if isinstance(inner, list) else inner.get("items", []) or []
         if not items:
             print("sync_calendar: 未找到日程")
             return []
@@ -546,7 +541,12 @@ class MemoryEngine:
         if result.returncode != 0:
             print(f"sync_approvals: failed: {result.stderr or result.stdout}")
             return []
-        items = (result.data or {}).get("data", {}).get("items", []) or []
+        raw = result.data or {}
+        if isinstance(raw, list):
+            items = raw
+        else:
+            inner = raw.get("data", raw)
+            items = inner if isinstance(inner, list) else inner.get("items", []) or []
         if not items:
             print(f"sync_approvals: 未找到 {status} 审批")
             return []
@@ -624,6 +624,61 @@ class MemoryEngine:
             as_of=as_of,
         )
 
+    # ── V1.15: 任务状态回流 ─────────────────────────────────────
+
+    def sync_task_status(self, data_dir: str | None = None) -> int:
+        """Query Feishu tasks created by this engine and update memory status.
+
+        Reads task_map.jsonl for task_guid → memory mapping, then queries
+        each task's current status. Updates corresponding next_step items:
+        - completed → status="resolved" in metadata
+        """
+        import json as _json
+        task_map_path = Path(data_dir or self.store.data_dir) / "task_map.jsonl"
+        if not task_map_path.exists():
+            return 0
+
+        entries = []
+        for line in task_map_path.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                try:
+                    entries.append(_json.loads(line))
+                except _json.JSONDecodeError:
+                    pass
+
+        if not entries or self.adapter is None:
+            return 0
+
+        updated = 0
+        seen = set()
+        for entry in entries[-50:]:  # Last 50 tasks
+            guid = entry.get("task_guid", "")
+            if not guid or guid in seen:
+                continue
+            seen.add(guid)
+
+            result = self.adapter.search_tasks(guid)
+            if result.returncode != 0:
+                continue
+            data = result.data or {}
+            tasks = data.get("data", {}).get("items", []) or []
+            for task in tasks:
+                if task.get("guid") != guid:
+                    continue
+                status = task.get("status", "")
+                if status in ("completed", "done"):
+                    items = self.store.list_items(entry.get("project_id", ""))
+                    summary = entry.get("summary", "")
+                    for item in items:
+                        if item.state_type == "next_step" and summary[:30] in item.current_value:
+                            item.metadata["task_status"] = "completed"
+                            item.metadata["task_guid"] = guid
+                            self.store._sweep_resolved_blockers()  # reuse save
+                            updated += 1
+                            break
+
+        return updated
+
     def _should_process_now(self, project_id: str | None) -> tuple[bool, str]:
         """Check if extraction should proceed based on debounce timing.
 
@@ -681,6 +736,7 @@ class MemoryEngine:
             pid: dt.isoformat()
             for pid, dt in self._last_process_time.items()
         }
+        self._debounce_state_path.parent.mkdir(parents=True, exist_ok=True)
         self._debounce_state_path.write_text(
             json.dumps(data, ensure_ascii=False), encoding="utf-8",
         )
@@ -711,10 +767,12 @@ class MemoryEngine:
     def _save_identity_state(self) -> None:
         """V1.12: 持久化身份和绑定信息。"""
         import json
+        self._identity_path.parent.mkdir(parents=True, exist_ok=True)
         self._identity_path.write_text(
             json.dumps(self._identity, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+        self._chat_map_path.parent.mkdir(parents=True, exist_ok=True)
         self._chat_map_path.write_text(
             json.dumps(self._chat_project_map, ensure_ascii=False, indent=2),
             encoding="utf-8",

@@ -36,17 +36,15 @@ class MemoryStore:
         每条日志为 JSONL 一行，记录操作者、操作类型、时间等。
         """
         import json as _json
+        from datetime import datetime, timezone
         entry = {
-            "timestamp": self.data_dir and str(self.data_dir) or "",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "operator_id": operator_id,
             "operation": operation,       # read / write / delete / search
             "project_id": project_id,
             "state_type": state_type,
             "detail": detail[:200],
         }
-        # 用实际时间替代
-        from datetime import datetime, timezone
-        entry["timestamp"] = datetime.now(timezone.utc).isoformat()
         self.data_dir.mkdir(parents=True, exist_ok=True)
         with self.audit_path.open("a", encoding="utf-8") as f:
             f.write(_json.dumps(entry, ensure_ascii=False) + "\n")
@@ -500,6 +498,182 @@ class MemoryStore:
                 results.append(item)
         return results
 
+    def update_item_review(
+        self, memory_id: str, new_review_status: str,
+        modified_value: str | None = None,
+    ):
+        """V1.15: 更新记忆的审核状态，可选修改 current_value。
+
+        Args:
+            memory_id: 目标记忆的 memory_id。
+            new_review_status: "approved" | "rejected" | "needs_review"
+            modified_value: 如果提供，同时修改 current_value。
+
+        Returns:
+            更新后的 MemoryItem，找不到时返回 None。
+        """
+        state = self.load_state()
+        items = [MemoryItem.from_dict(item) for item in state.get("items", [])]
+        history = [MemoryItem.from_dict(item) for item in state.get("history", [])]
+        processed = list(state.get("processed_event_ids", []))
+
+        target = None
+        for item in items:
+            if item.memory_id == memory_id:
+                target = item
+                break
+
+        if target is None:
+            return None
+
+        if new_review_status == "rejected":
+            items = [i for i in items if i.memory_id != memory_id]
+            target.valid_to = utc_now_iso()
+            target.review_status = "rejected"
+            history.append(target)
+        else:
+            target.review_status = new_review_status
+            if modified_value is not None:
+                target.current_value = modified_value[:500]
+
+        self.save_state(items, history, processed)
+        return target
+
+    def update_blocker_status(
+        self, memory_id: str, new_status: str, extra: dict | None = None,
+    ):
+        """V1.15: Update blocker lifecycle status in metadata.
+
+        Args:
+            memory_id: Target blocker's memory_id.
+            new_status: open | acknowledged | waiting_external | resolved | obsolete
+            extra: Optional dict with acknowledged_by, resolved_by, dependency_owner, etc.
+
+        Returns updated MemoryItem or None.
+        """
+        state = self.load_state()
+        items = [MemoryItem.from_dict(it) for it in state.get("items", [])]
+        history = [MemoryItem.from_dict(it) for it in state.get("history", [])]
+        processed = list(state.get("processed_event_ids", []))
+
+        target = None
+        for item in items:
+            if item.memory_id == memory_id and item.state_type == "blocker":
+                target = item
+                break
+
+        if target is None:
+            return None
+
+        meta = dict(target.metadata) if target.metadata else {}
+        meta["blocker_status"] = new_status
+        if extra:
+            for k in ("acknowledged_by", "resolved_by", "dependency_owner",
+                      "blocked_owner", "blocked_item", "blocking_reason"):
+                if k in extra and extra[k]:
+                    meta[k] = str(extra[k])
+        if new_status == "resolved" and "resolved_at" not in meta:
+            meta["resolved_at"] = utc_now_iso()
+
+        target.metadata = meta
+        self.save_state(items, history, processed)
+        return target
+
+    def _sweep_resolved_blockers(self) -> int:
+        """V1.15: Move resolved blockers older than 7 days to history."""
+        from datetime import datetime, timedelta, timezone as tz
+        cutoff = (datetime.now(tz.utc) - timedelta(days=7)).isoformat()
+
+        state = self.load_state()
+        items = [MemoryItem.from_dict(it) for it in state.get("items", [])]
+        history = [MemoryItem.from_dict(it) for it in state.get("history", [])]
+        processed = list(state.get("processed_event_ids", []))
+
+        swept = 0
+        remaining = []
+        for item in items:
+            if item.state_type != "blocker":
+                remaining.append(item)
+                continue
+            meta = item.metadata or {}
+            if meta.get("blocker_status") in ("resolved", "obsolete"):
+                resolved_at = meta.get("resolved_at", "")
+                if resolved_at and resolved_at < cutoff:
+                    item.valid_to = utc_now_iso()
+                    history.append(item)
+                    swept += 1
+                    continue
+            remaining.append(item)
+
+        if swept > 0:
+            self.save_state(remaining, history, processed)
+        return swept
+
+    def merge_items(self, target_id: str, source_id: str | None = None):
+        """V1.15 OPT-4: Merge source item into target item.
+
+        If source_id is provided, merges that specific item into target.
+        If source_id is None, merges the most similar needs_review item
+        into target (auto-detected via bigram similarity).
+
+        Returns the target item, or None if either not found.
+        """
+        state = self.load_state()
+        items = [MemoryItem.from_dict(it) for it in state.get("items", [])]
+        history = [MemoryItem.from_dict(it) for it in state.get("history", [])]
+        processed = list(state.get("processed_event_ids", []))
+
+        target = None
+        source = None
+        for item in items:
+            if item.memory_id == target_id:
+                target = item
+            if source_id and item.memory_id == source_id:
+                source = item
+
+        if target is None:
+            return None
+
+        # Auto-detect source if not provided
+        if source is None and not source_id:
+            best_sim = 0.0
+            for item in items:
+                if item.memory_id == target_id:
+                    continue
+                if item.state_type != target.state_type:
+                    continue
+                sim = self._compute_text_similarity(
+                    target.current_value, item.current_value,
+                )
+                if sim > 0.35 and sim > best_sim:
+                    best_sim = sim
+                    source = item
+
+        if source is None:
+            return target  # nothing to merge
+
+        # Merge source_refs
+        existing_ids = {ref.message_id for ref in target.source_refs}
+        for ref in source.source_refs:
+            if ref.message_id not in existing_ids:
+                target.source_refs.append(ref)
+                existing_ids.add(ref.message_id)
+
+        target.confidence = max(target.confidence, source.confidence)
+        target.supersedes = list(set(target.supersedes + source.supersedes
+                                     + [source.memory_id]))
+        if not target.review_status or target.review_status == "needs_review":
+            target.review_status = "needs_review"
+
+        # Move source to history
+        source.valid_to = utc_now_iso()
+        source.review_status = "merged"
+        items = [i for i in items if i.memory_id != source.memory_id]
+        history.append(source)
+
+        self.save_state(items, history, processed)
+        return target
+
     def build_inverted_index(self) -> InvertedIndex:
         """V1.12: 构建全文倒排索引。
 
@@ -531,7 +705,12 @@ class MemoryStore:
         self.save_state(items, history, processed)
 
     def upsert_items(self, new_items: Iterable[MemoryItem], processed_ids: Iterable[str] = ()) -> list[MemoryItem]:
-        """Insert or supersede active memory items with 3-layer deduplication.
+        """Insert or supersede active memory items with 4-layer deduplication.
+
+        V1.14: Now returns (active_items, diff) tuple where diff classifies
+        each new_item as created / updated / unchanged for trigger engine use.
+        Backward-compatible: callers using items, diff = upsert_items(...) work;
+        callers using items = upsert_items(...) get the items list as before.
 
         V1.5 改进：三层去重架构
         1. Layer 1: Identity Key 去重（project_id:state_type:key 相同视为同一记忆）
@@ -543,7 +722,8 @@ class MemoryStore:
             processed_ids: 已处理的事件 ID 列表
 
         Returns:
-            当前活跃的记忆项列表
+            (当前活跃的记忆项列表, diff_dict)
+            diff_dict = {"created": [...], "updated": [...], "unchanged": [...]}
         """
         state = self.load_state()
         items = [MemoryItem.from_dict(item) for item in state.get("items", [])]
@@ -553,44 +733,42 @@ class MemoryStore:
         # 按 identity_key 建立索引，用于快速查找
         by_key = {item.identity_key(): item for item in items}
 
+        # V1.14: diff tracking for trigger engine
+        diff_created: list[MemoryItem] = []
+        diff_updated: list[MemoryItem] = []
+        diff_unchanged: list[MemoryItem] = []
+        diff_conflicts: list[MemoryItem] = []  # V1.15: conflict tracking
+
         for new_item in new_items:
             old_item = by_key.get(new_item.identity_key())
 
             if old_item:
                 # === Layer 1: Identity Key 去重 ===
-                # identity_key 相同，可能是同一记忆的更新或重复
 
                 # === Layer 2: Content Hash 去重 ===
-                # 计算内容哈希，判断是否完全相同
                 old_hash = hashlib.sha1(old_item.current_value.encode("utf-8")).hexdigest()
                 new_hash = hashlib.sha1(new_item.current_value.encode("utf-8")).hexdigest()
 
-                # V1.6：确保新 item 的 valid_from 有值，优先从 source_refs 取
                 if not new_item.valid_from and new_item.source_refs:
                     new_item.valid_from = new_item.source_refs[0].created_at
                 if not new_item.valid_from:
                     new_item.valid_from = utc_now_iso()
 
                 if old_hash == new_hash:
-                    # 内容完全相同，跳过插入，但合并 source_refs
-                    # P0 修复：合并时按 message_id 去重，避免重复证据
                     existing_ids = {ref.message_id for ref in old_item.source_refs}
                     for ref in new_item.source_refs:
                         if ref.message_id not in existing_ids:
                             old_item.source_refs.append(ref)
                             existing_ids.add(ref.message_id)
                     old_item.confidence = max(old_item.confidence, new_item.confidence)
+                    diff_unchanged.append(new_item)
                     continue
 
                 # === Layer 3: Semantic Similarity 去重 ===
-                # 计算语义相似度，判断是否高度相似
                 similarity = self._compute_text_similarity(old_item.current_value, new_item.current_value)
 
                 if similarity > 0.9:
-                    # P0 修复：否定词极性检查
-                    # "张三负责" 和 "张三不负责" 字符bigram相似度高，但语义相反
                     if self._has_negation_polarity_change(old_item.current_value, new_item.current_value):
-                        # V1.6: 标记旧项失效时间
                         if old_item.valid_to is None:
                             old_item.valid_to = utc_now_iso()
                         history.append(old_item)
@@ -599,10 +777,9 @@ class MemoryStore:
                         items = [item for item in items if item.memory_id != old_item.memory_id]
                         by_key[new_item.identity_key()] = new_item
                         items.append(new_item)
+                        diff_updated.append(new_item)
                         continue
 
-                    # V1.6：关键字段保护检查
-                    # owner 或 status 变化 → 不应 semantic merge，应 supersede
                     if old_item.owner != new_item.owner or old_item.status != new_item.status:
                         if old_item.valid_to is None:
                             old_item.valid_to = utc_now_iso()
@@ -612,17 +789,15 @@ class MemoryStore:
                         items = [item for item in items if item.memory_id != old_item.memory_id]
                         by_key[new_item.identity_key()] = new_item
                         items.append(new_item)
+                        diff_updated.append(new_item)
                         continue
 
-                    # 语义高度相似（>90%）且否定极性一致，关键字段未变化，视为同一记忆的不同表述
-                    # 合并 source_refs，提升置信度
                     old_item.source_refs.extend(new_item.source_refs)
                     old_item.confidence = max(old_item.confidence, new_item.confidence)
+                    diff_unchanged.append(new_item)
                     continue
 
                 # 内容不同且相似度不高，视为记忆的更新/推翻
-                # 将旧记忆移入历史，新记忆标记为 supersede
-                # V1.6: 标记旧项失效时间
                 if old_item.valid_to is None:
                     old_item.valid_to = utc_now_iso()
                 history.append(old_item)
@@ -631,10 +806,8 @@ class MemoryStore:
                 items = [item for item in items if item.memory_id != old_item.memory_id]
 
             # V1.11 Layer 4: 跨 key 决策/截止日期覆盖
-            # 不同 key 但同主题 → 覆盖旧条目
-            # 注意：_is_same_topic 是基于共享关键词+bigram相似度的启发式方法，
-            # 非语义理解。对同义词（switch/migrate）、隐式关联（"提高性能"
-            # vs "优化数据库"）可能漏判。生产环境可升级为 embedding 语义判断。
+            # V1.15: 冲突检测 — 同主题但 value 差异大时标记冲突而非覆盖
+            layer4_applied = False
             if old_item is None and new_item.state_type in ("decision", "deadline"):
                 for existing in list(items):
                     if existing.state_type != new_item.state_type:
@@ -645,19 +818,47 @@ class MemoryStore:
                         existing.current_value, new_item.current_value,
                         new_item.state_type,
                     ):
-                        if existing.valid_to is None:
-                            existing.valid_to = utc_now_iso()
-                        history.append(existing)
-                        new_item.version = existing.version + 1
-                        new_item.supersedes = [*existing.supersedes, existing.memory_id]
-                        items = [item for item in items if item.memory_id != existing.memory_id]
-                        old_key = existing.identity_key()
-                        if by_key.get(old_key) is existing:
-                            del by_key[old_key]
+                        sim = self._compute_text_similarity(
+                            existing.current_value, new_item.current_value)
+                        # 有明确覆盖信号 → 不视为冲突（"改为""不再"等）
+                        has_override_signal = any(
+                            s in new_item.current_value
+                            for s in ("改为", "不再", "换成", "改成", "改用")
+                        )
+                        # V1.15: 同主题但内容差异大且无覆盖信号 → 冲突
+                        # deadline 不同日期总是视为更新（不是冲突）
+                        is_conflict = (
+                            sim < 0.5
+                            and not has_override_signal
+                            and new_item.state_type != "deadline"
+                        )
+                        if is_conflict:
+                            meta_ex = dict(existing.metadata) if existing.metadata else {}
+                            meta_new = dict(new_item.metadata) if new_item.metadata else {}
+                            meta_ex["conflict_status"] = "conflicting"
+                            meta_ex["conflict_with"] = new_item.memory_id
+                            meta_new["conflict_status"] = "conflicting"
+                            meta_new["conflict_with"] = existing.memory_id
+                            existing.metadata = meta_ex
+                            existing.review_status = "needs_review"
+                            new_item.metadata = meta_new
+                            new_item.review_status = "needs_review"
+                            diff_conflicts.append(new_item)
+                            layer4_applied = "conflict"
+                        else:
+                            # 内容相近 → 正常覆盖
+                            if existing.valid_to is None:
+                                existing.valid_to = utc_now_iso()
+                            history.append(existing)
+                            new_item.version = existing.version + 1
+                            new_item.supersedes = [*existing.supersedes, existing.memory_id]
+                            items = [item for item in items if item.memory_id != existing.memory_id]
+                            old_key = existing.identity_key()
+                            if by_key.get(old_key) is existing:
+                                del by_key[old_key]
+                            layer4_applied = True
 
                         # V1.12 REAL-2: 传递闭包
-                        # d1="用React" → d2="换Vue"(孤立) → d3="还是React"
-                        # d3 覆盖 d1 时，d2 与两者均无关联 → 被跳过 → 一并覆盖
                         for middle in list(items):
                             if middle.state_type != new_item.state_type:
                                 continue
@@ -665,7 +866,6 @@ class MemoryStore:
                                 continue
                             if middle.memory_id in (existing.memory_id, new_item.memory_id):
                                 continue
-                            # 中间项与旧/新均无关联 → 已被跳过的孤立决策
                             linked_to_old = self._is_same_topic(
                                 middle.current_value, existing.current_value, new_item.state_type)
                             linked_to_new = self._is_same_topic(
@@ -683,8 +883,35 @@ class MemoryStore:
             by_key[new_item.identity_key()] = new_item
             items.append(new_item)
 
+            # V1.15: 高风险记忆标记 needs_review
+            if not getattr(new_item, "review_status", ""):
+                _mark_needs_review = (
+                    (new_item.state_type in ("decision", "deadline")
+                     and layer4_applied)  # 跨 key 覆盖
+                    or (old_item is not None)  # supersede 旧版本
+                    or new_item.confidence < 0.60  # 低置信度
+                    or len(new_item.source_refs) == 0  # 无证据
+                )
+                if _mark_needs_review:
+                    new_item.review_status = "needs_review"
+                else:
+                    new_item.review_status = "auto_approved"
+
+            if layer4_applied == "conflict":
+                pass  # already added to diff_conflicts
+            elif old_item is not None or layer4_applied:
+                diff_updated.append(new_item)
+            else:
+                diff_created.append(new_item)
+
         self.save_state(items, history, processed)
-        return items
+        diff = {
+            "created": diff_created,
+            "updated": diff_updated,
+            "unchanged": diff_unchanged,
+            "conflicts": diff_conflicts,
+        }
+        return items, diff
 
     # 中文否定词集合，用于检测语义极性变化
     _NEGATION_WORDS = frozenset(["不", "没", "别", "勿", "未", "无", "否", "莫", "休", "甭"])

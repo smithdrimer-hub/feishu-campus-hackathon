@@ -60,10 +60,10 @@ class TestThreeLayerDedup(unittest.TestCase):
         item2 = self._make_item("api-docs", "张三负责 API 文档", owner="张三",
                                 message_id="msg_002")  # 不同 message_id
 
-        result1 = self.store.upsert_items([item1])
+        result1, _ = self.store.upsert_items([item1])
         self.assertEqual(len(result1), 1)
 
-        result2 = self.store.upsert_items([item2])
+        result2, _ = self.store.upsert_items([item2])
         self.assertEqual(len(result2), 1)
 
         # source_refs 应合并（不同 message_id）
@@ -78,7 +78,7 @@ class TestThreeLayerDedup(unittest.TestCase):
                                 message_id="msg_001")  # 相同 message_id
 
         self.store.upsert_items([item1])
-        result = self.store.upsert_items([item2])
+        result, _ = self.store.upsert_items([item2])
 
         # 相同 message_id 的 source_refs 应去重
         message_ids = [ref.message_id for ref in result[0].source_refs]
@@ -90,8 +90,8 @@ class TestThreeLayerDedup(unittest.TestCase):
         item1 = self._make_item("api-docs", "张三负责 API 文档开发工作", owner="张三")
         item2 = self._make_item("api-docs", "张三负责 API 文档开发工作。", owner="张三")
 
-        result1 = self.store.upsert_items([item1])
-        result2 = self.store.upsert_items([item2])
+        result1, _ = self.store.upsert_items([item1])
+        result2, _ = self.store.upsert_items([item2])
 
         # Similar content should be merged (not create new version)
         self.assertEqual(len(result2), 1)
@@ -108,10 +108,10 @@ class TestThreeLayerDedup(unittest.TestCase):
         item2 = self._make_item("api-docs", "张三不负责 API 文档", owner="张三",
                                 message_id="msg_002")
 
-        result1 = self.store.upsert_items([item1])
+        result1, _ = self.store.upsert_items([item1])
         self.assertEqual(len(result1), 1)
 
-        result2 = self.store.upsert_items([item2])
+        result2, _ = self.store.upsert_items([item2])
 
         # 否定极性变化应导致 supersede 而非 merge
         self.assertEqual(len(result2), 1)
@@ -130,8 +130,8 @@ class TestThreeLayerDedup(unittest.TestCase):
         item2 = self._make_item("current_owner", "李四", owner="李四", state_type="owner",
                                 message_id="msg_002")
 
-        result1 = self.store.upsert_items([item1])
-        result2 = self.store.upsert_items([item2])
+        result1, _ = self.store.upsert_items([item1])
+        result2, _ = self.store.upsert_items([item2])
 
         self.assertEqual(len(result2), 1)
         self.assertEqual(result2[0].current_value, "李四")
@@ -146,8 +146,8 @@ class TestThreeLayerDedup(unittest.TestCase):
         item1 = self._make_item("api-docs", "张三负责", owner="张三")
         item2 = self._make_item("api-docs", "李四负责", owner="李四")
 
-        result1 = self.store.upsert_items([item1])
-        result2 = self.store.upsert_items([item2])
+        result1, _ = self.store.upsert_items([item1])
+        result2, _ = self.store.upsert_items([item2])
 
         self.assertEqual(len(result2), 1)
         self.assertEqual(result2[0].version, 2)
@@ -550,8 +550,8 @@ class TestAmbiguousPostProcessing(unittest.TestCase):
     def tearDown(self):
         self.temp_dir.cleanup()
 
-    def test_ambiguous_low_confidence_dropped(self):
-        """V1.6: ambiguous + confidence<=0.3 的候选应被丢弃."""
+    def test_ambiguous_low_confidence_kept_for_review(self):
+        """V1.16: ambiguous + confidence<=0.3 不再丢弃，而是标记 needs_review."""
         from memory.llm_provider import LLMProvider
         class TestProvider(LLMProvider):
             def generate(self, prompt):
@@ -571,8 +571,10 @@ class TestAmbiguousPostProcessing(unittest.TestCase):
         events = [{"project_id": "test", "chat_id": "chat", "message_id": "msg_001",
                     "text": "他说要改方案", "created_at": "2026-04-28T10:00:00"}]
         items = extractor.extract(events)
-        self.assertEqual(len(items), 0, "ambiguous+低置信度的候选应被丢弃")
-        self.assertEqual(len(extractor._dropped_candidates), 1, "丢弃的候选应记录在 _dropped_candidates")
+        self.assertEqual(len(items), 1, "V1.16: 模糊项保留而非丢弃")
+        self.assertEqual(items[0].review_status, "needs_review")
+        self.assertEqual(items[0].metadata.get("ambiguous_reason"), "指代不明或模糊表达")
+        self.assertEqual(len(extractor._dropped_candidates), 1)
 
     def test_ambiguous_high_confidence_not_dropped(self):
         """V1.6: ambiguous 但 confidence>0.3 应保留."""
@@ -671,7 +673,7 @@ class TestLayer3FieldProtection(unittest.TestCase):
         old = self._make_item("张三负责 API 文档开发", owner="张三", message_id="msg_001")
         new = self._make_item("李四负责 API 文档开发", owner="李四", message_id="msg_002")
         self.store.upsert_items([old])
-        result = self.store.upsert_items([new])
+        result, _ = self.store.upsert_items([new])
         self.assertEqual(result[0].owner, "李四", "owner 不同应 supersede")
         self.assertEqual(result[0].version, 2)
 
@@ -680,7 +682,7 @@ class TestLayer3FieldProtection(unittest.TestCase):
         old = self._make_item("DDL 从周五改到下周三完成交付", message_id="msg_001", key="deadline")
         new = self._make_item("DDL 从周三改到周五完成交付", message_id="msg_002", key="deadline")
         self.store.upsert_items([old])
-        result = self.store.upsert_items([new])
+        result, _ = self.store.upsert_items([new])
         self.assertEqual(result[0].version, 2, "DDL 日期变更应 supersede 而非 merge")
 
 

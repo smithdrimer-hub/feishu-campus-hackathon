@@ -78,7 +78,7 @@ class MultiUserStore:
     def find_items_by_message_id(self, message_id: str) -> list[MemoryItem]:
         return self.current_store.find_items_by_message_id(message_id)
 
-    def upsert_items(self, new_items, processed_ids=()) -> list[MemoryItem]:
+    def upsert_items(self, new_items, processed_ids=()):
         return self.current_store.upsert_items(new_items, processed_ids)
 
     def append_raw_events(self, events) -> int:

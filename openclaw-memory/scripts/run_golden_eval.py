@@ -184,11 +184,12 @@ def eval_case(sample: dict, extractor_name: str = "rule") -> dict:
         if any(item.state_type == forbid_type for item in active):
             errors.append(f"should not extract state_type={forbid_type} but found in active")
 
-    # 提取结果摘要
+    # 提取结果摘要（含 state_type 用于 P/R/F1 统计）
     extracted_summary = [
         {"state_type": item.state_type, "owner": item.owner, "value": item.current_value[:40]}
         for item in active
     ]
+    extracted_types = list({item.state_type for item in active})
     history_summary = [
         {"state_type": h.state_type, "owner": h.owner, "value": h.current_value[:40]}
         for h in history
@@ -199,16 +200,29 @@ def eval_case(sample: dict, extractor_name: str = "rule") -> dict:
         "scenario_type": scenario_type,
         "pass": len(errors) == 0,
         "extracted": extracted_summary,
+        "extracted_types": extracted_types,
         "history": history_summary,
         "extractor": extractor_name,
         "errors": errors,
     }
 
 
-def compute_metrics(results: list[dict]) -> dict:
-    """计算 precision/recall/F1。
+def _expected_types_from_sample(sample: dict, extractor_name: str) -> set[str]:
+    """Extract the set of state_types expected in this sample."""
+    if extractor_name in ("hybrid", "llm") and "llm_expected_items" in sample:
+        items = sample.get("llm_expected_items", [])
+    else:
+        items = sample.get("expected_items", [])
+    return {it.get("state_type", "") for it in items if it.get("state_type")}
 
-    对每个 case，pass=true 视为正确，false 视为错误。
+
+def compute_metrics(results: list[dict], samples: list[dict] | None = None,
+                    extractor_name: str = "rule") -> dict:
+    """V1.15: 计算总体通过率 + 按 state_type 的 precision/recall/F1。
+
+    TP = 期望提取且实际提取了该类型
+    FP = 实际提取了该类型但期望中没有
+    FN = 期望提取但实际未提取该类型
     """
     total = len(results)
     passed = sum(1 for r in results if r["pass"])
@@ -229,12 +243,43 @@ def compute_metrics(results: list[dict]) -> dict:
             "pass_rate": f"{type_passed / len(cases) * 100:.1f}%" if cases else "N/A",
         }
 
+    # V1.15: 按 state_type 的 precision/recall/F1
+    state_stats: dict[str, dict[str, int]] = {}
+    for i, r in enumerate(results):
+        sample = samples[i] if samples and i < len(samples) else {}
+        expected = _expected_types_from_sample(sample, extractor_name)
+        actual = set(r.get("extracted_types", []))
+
+        for t in expected | actual:
+            if t not in state_stats:
+                state_stats[t] = {"TP": 0, "FP": 0, "FN": 0}
+            in_exp = t in expected
+            in_act = t in actual
+            if in_exp and in_act:
+                state_stats[t]["TP"] += 1
+            elif in_act and not in_exp:
+                state_stats[t]["FP"] += 1
+            elif in_exp and not in_act:
+                state_stats[t]["FN"] += 1
+
+    prf_by_type = {}
+    for t, s in sorted(state_stats.items()):
+        tp, fp, fn = s["TP"], s["FP"], s["FN"]
+        p = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+        r = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+        f1 = 2 * p * r / (p + r) if (p + r) > 0 else 0.0
+        prf_by_type[t] = {
+            "TP": tp, "FP": fp, "FN": fn,
+            "precision": f"{p:.2f}", "recall": f"{r:.2f}", "f1": f"{f1:.2f}",
+        }
+
     return {
         "total": total,
         "passed": passed,
         "failed": failed,
-        "pass_rate": f"{passed / total * 100:.1f}%",
+        "pass_rate": f"{passed / total * 100:.1f}%" if total else "N/A",
         "by_type": type_metrics,
+        "by_state_type": prf_by_type,
     }
 
 
@@ -307,7 +352,7 @@ def main():
             print()
 
         # 输出指标
-        metrics = compute_metrics(all_results)
+        metrics = compute_metrics(all_results, samples, ext_name)
         print(f"--- Overall ---")
         print(f"  Total: {metrics['total']}")
         print(f"  Passed: {metrics['passed']}")
@@ -319,6 +364,18 @@ def main():
         for st, m in sorted(metrics["by_type"].items()):
             print(f"  {st:25s}: {m['passed']:2d}/{m['total']:2d} pass ({m['pass_rate']})")
         print()
+
+        # V1.15: 按 state_type 的 precision/recall/F1（仅 RuleOnly）
+        prf = metrics.get("by_state_type", {})
+        if prf:
+            print(f"--- By State Type (Precision / Recall / F1) ---")
+            print(f"  {'state_type':20s} {'P':>6s} {'R':>6s} {'F1':>6s}  {'TP':>4s} {'FP':>4s} {'FN':>4s}")
+            print(f"  {'-'*20} {'-'*6} {'-'*6} {'-'*6}  {'-'*4} {'-'*4} {'-'*4}")
+            for t, s in sorted(prf.items()):
+                print(f"  {t:20s} {s['precision']:>6s} {s['recall']:>6s} {s['f1']:>6s}  {s['TP']:>4d} {s['FP']:>4d} {s['FN']:>4d}")
+            print()
+            print(f"  (以上指标仅反映 {metrics['total']} 条 Golden Set 上的表现，不代表真实办公场景)")
+            print()
 
         # 列出失败的 case_id（非对比模式）
         if not args.compare:

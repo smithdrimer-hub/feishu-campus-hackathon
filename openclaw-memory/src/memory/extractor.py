@@ -17,14 +17,6 @@ from memory.candidate import CandidateValidationError, candidate_to_memory_item,
 from memory.llm_provider import LLMProvider
 from memory.schema import MemoryItem, source_ref_from_event
 
-# V1.10 新增: 复杂语义信号 —— 当规则提取器遇到这些信号时需 LLM 补充
-_COMPLEX_SIGNALS = frozenset([
-    "不再", "改为", "取消", "换成", "改成", "转给",
-    "但是", "不过", "然而", "还是别",
-    "我来", "他来", "她来",
-    "放弃", "算了", "先后", "不做了", "回来了", "休假回来", "不阻塞", "扩容了",
-    "考虑", "是否", "待定",
-])
 
 
 class BaseExtractor:
@@ -65,6 +57,15 @@ class LLMExtractor(BaseExtractor):
                 for candidate in payload["candidates"]
             ]
             items = [candidate_to_memory_item(candidate) for candidate in candidates]
+            # V1.15: 从 LLM 原始输出中提取 decision_strength
+            raw_candidates = payload.get("candidates", [])
+            for i, item in enumerate(items):
+                if item.state_type == "decision" and i < len(raw_candidates):
+                    raw = raw_candidates[i]
+                    if isinstance(raw, dict) and "decision_strength" in raw:
+                        item.decision_strength = str(raw["decision_strength"])
+                        if item.decision_strength not in ("confirmed",):
+                            item.review_status = "needs_review"
             # V1.6: 后处理——过滤 ambiguous + 低置信度候选
             items = self._filter_ambiguous(items, candidates)
             # V1.10: 标准化 state_type（goal → project_goal 等别名映射）
@@ -85,11 +86,18 @@ class LLMExtractor(BaseExtractor):
         for item, candidate in zip(items, candidates):
             is_ambiguous = "[ambiguous" in item.current_value
             if is_ambiguous and item.confidence <= 0.3:
+                # V1.16: 保留而非丢弃——标记为待审核，保留模糊关联
+                item.review_status = "needs_review"
+                if not item.metadata:
+                    item.metadata = {}
+                item.metadata["ambiguous_reason"] = "指代不明或模糊表达"
+                item.metadata["possible_match"] = True
+                filtered.append(item)
                 self._dropped_candidates.append({
                     "key": item.identity_key(),
                     "current_value": item.current_value,
                     "confidence": item.confidence,
-                    "reason": "ambiguous+low_confidence",
+                    "reason": "ambiguous+low_confidence (kept for review)",
                 })
             else:
                 filtered.append(item)
@@ -231,6 +239,7 @@ class LLMExtractor(BaseExtractor):
 - status: 固定为 "active"
 - confidence: 置信度（明确表达 0.75-0.9，隐式表达 0.55-0.7）
 - source_refs: 来源引用列表，每个引用包含 chat_id, message_id, excerpt（原文摘要）, created_at
+- decision_strength: 仅用于 state_type="decision"。根据表述强度选择：discussion（讨论中）/ preference（偏好表达）/ tentative（暂定）/ confirmed（正式确认）。判断依据：是否有明确确认词（确定、最终方案、就这么定了）→ confirmed；是否有暂定词（先这样、暂时、初步）→ tentative；是否有倾向词（觉得、倾向于、建议）→ preference；是否有讨论词（考虑、要不要、打算）→ discussion。注意区分"我考虑一下"（个人思考，不提取）和"考虑用XXX"（协作讨论，提取为 discussion）
 - detected_at: 检测时间（ISO 格式，用消息的 created_at）
 
 【文档内容提取规则】(V1.12 新增)
@@ -252,6 +261,32 @@ class LLMExtractor(BaseExtractor):
 6. 纯日常回应："稍等我看一下""我到了""我试试看"
 
 判断原则：去掉所有协作信号后，剩余内容不足以形成协作状态 → 返回空列表。
+
+【语言要求】(V1.16)
+- 消息是中文 → 提取结果必须是中文
+- current_value 和 rationale 保持消息的原始语言
+- 不要翻译中文术语为英文（如"微服务"不要写成"microservices"）
+- 不要在中英文之间频繁切换
+- 如果消息本身是中英混合（如"用 React 做前端"），保留混合格式
+
+【执行步骤】(V1.16 — 请严格按此顺序处理)
+步骤1 — 代词解析：将"我/你/他/她/我们/他们"替换为具体人名。
+  - "我" → 该消息的发送者姓名
+  - "他/她" → 从前序消息中查找最近明确提到的人名
+  - 无法确定时：保留代词，在 current_value 中标注 [ambiguous: 指代不明]，confidence ≤ 0.3
+步骤2 — 时间解析：将"明天/后天/下周/周五"替换为具体日期。
+  - 基于消息自身的 created_at 计算
+  - "下周" → 下周一；"下周五" → 对应日期
+步骤3 — 指代解析：将"这个/那个/该模块/这个方案"替换为前序消息中的具体名称。
+步骤4 — 协作信号提取：判断消息是否包含 8 种协作状态。
+步骤5 — 决策强度判断：区分 discussion（讨论）/ preference（偏好）/ tentative（暂定）/ confirmed（确认）。
+步骤6 — 输出 JSON。
+
+【跨消息推理】(V1.16 — 关键！)
+这些消息是多轮对话。注意以下模式：
+- 如果消息 A 提出一个方案，消息 B 提出不同意见 → 这是同一个讨论的来回，提取为一条 decision（含 preference 或 tentative 变更），而非两条独立 decision
+- 如果多条消息讨论同一主题（如都在说"技术选型"），将它们的信息合并为一条记忆
+- 如果消息 A 说"XX 还没好"，消息 B 说"XX 已经做完了"→ 后者否定了前者的 blocker，只保留后者的结论
 
 【消息列表】
 {json.dumps(events, ensure_ascii=False, indent=2)}
@@ -319,7 +354,7 @@ class LLMExtractor(BaseExtractor):
             if sender_id in author_map:
                 continue
             sender_type = sender.get("sender_type", "unknown")
-            # V1.12：跳过空/anonymous/webhook，但保留 system（需保留以正确匹配已处理事件）和 doc_sync/task_sync
+            # V1.12：跳过空/anonymous/webhook/system，保留 doc_sync/task_sync
             if sender_type in ("", "anonymous", "webhook"):
                 continue
             if sender_type == "user":
@@ -380,6 +415,8 @@ class RuleBasedExtractor(BaseExtractor):
 
     # V1.6: 成员状态关键词
     _MEMBER_STATUS_KEYWORDS = frozenset(["请假", "不在", "休假", "出差", "习惯用", "擅长"])
+    # V1.15: 第一人称代词（不作为owner提取）
+    _SELF_REFERENCE = frozenset({"我", "你", "他", "她", "我们", "你们", "他们", "她们", "大家", "自己"})
 
     def extract(self, events: Iterable[dict]) -> list[MemoryItem]:
         """Extract candidate memory items from normalized raw message events."""
@@ -473,18 +510,25 @@ class RuleBasedExtractor(BaseExtractor):
                 text,
             )
         if match:
-            items.append(self._build_owner_item(event, text, match.group(1)))
+            owner_item = self._build_owner_item(event, text, match.group(1))
+            if owner_item:
+                items.append(owner_item)
 
         # Pattern 2: "由张三负责" / "由张三处理/做/开发/..."
         match = re.search(
             r"由\s*([A-Za-z0-9_\-一-鿿]{1,20})"
-            r"\s*(?:负责|owner|做|处理|开发|测试|实现|设计|修改|跟进|对接|完成|编写|优化)",
+            r"\s*(?:负责|owner|做|处理|开发|测试|实现|设计|修改|跟进|对接|完成|编写|优化)"
+            r"\s*([^，。,、；;!\n]{1,20})?",
             text,
         )
         if match:
             name = match.group(1)
+            domain_raw = (match.group(2) or "").strip()
+            domain = self._slugify(domain_raw) if domain_raw else ""
             if name not in {item.owner for item in items}:
-                items.append(self._build_owner_item(event, text, name))
+                owner_item = self._build_owner_item(event, text, name, domain)
+                if owner_item:
+                    items.append(owner_item)
 
         # Pattern 3: "XXX是这个模块的负责人" (V1.11)
         match = re.search(
@@ -494,29 +538,45 @@ class RuleBasedExtractor(BaseExtractor):
         if match:
             name = match.group(1)
             if name not in {item.owner for item in items}:
-                items.append(self._build_owner_item(event, text, name))
+                owner_item = self._build_owner_item(event, text, name)
+                if owner_item:
+                    items.append(owner_item)
 
         # Pattern 4: English "John is the owner of X" (V1.11)
         match = re.search(
-            r"([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s+is\s+the\s+owner\s+of",
+            r"([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s+is\s+the\s+owner\s+of\s+(.+)",
             text,
         )
         if match:
             name = match.group(1)
+            domain_raw = (match.group(2) or "").strip()
+            domain = self._slugify(domain_raw) if domain_raw else ""
             if name not in {item.owner for item in items}:
-                items.append(self._build_owner_item(event, text, name))
+                owner_item = self._build_owner_item(event, text, name, domain)
+                if owner_item:
+                    items.append(owner_item)
+
+        # Track names extracted by Pattern 2 to avoid Pattern 5 double-match
+        _pat2_names = {item.owner for item in items}
 
         # Pattern 5: "分工：张三负责前端，李四负责后端" — 多负责人 (V1.11)
         for match in re.finditer(
-            r"([A-Za-z0-9_\-一-鿿]{1,20})\s*负责",
+            r"([A-Za-z0-9_\-一-鿿]{1,20})\s*负责\s*([^，。,、；;!\n]{1,20})?",
             text,
         ):
             name = match.group(1)
             if name.isascii() and name.islower():
                 continue
+            # V1.16: 自指代不再跳过，由 _build_owner_item 解析为发送者
             if name in {item.owner for item in items}:
                 continue
-            items.append(self._build_owner_item(event, text, name))
+            if name in _pat2_names:  # V1.15: skip if already extracted by Pattern 2
+                continue
+            domain_raw = (match.group(2) or "").strip()
+            domain = self._slugify(domain_raw) if domain_raw else ""
+            owner_item = self._build_owner_item(event, text, name, domain)
+            if owner_item:
+                items.append(owner_item)
 
         # Pattern 6: "张三：负责后端引擎" — 文档列表常见格式 (V1.12)
         _non_name_words = frozenset({
@@ -524,13 +584,31 @@ class RuleBasedExtractor(BaseExtractor):
             "项目", "文档", "系统", "模块", "功能", "问题", "风险",
         })
         match = re.search(
-            r"([A-Za-z0-9_\-一-鿿]{1,20})\s*[:：]\s*(?:负责|owner|处理|开发|测试|实现|设计|修改|跟进|对接|完成|编写|优化)",
+            r"([A-Za-z0-9_\-一-鿿]{1,20})\s*[:：]\s*(?:负责|owner|处理|开发|测试|实现|设计|修改|跟进|对接|完成|编写|优化)"
+            r"\s*([^，。,、；;!\n]{1,20})?",
             text,
         )
         if match:
             name = match.group(1)
+            domain_raw = (match.group(2) or "").strip()
+            domain = self._slugify(domain_raw) if domain_raw else ""
             if name not in _non_name_words and name not in {item.owner for item in items}:
-                items.append(self._build_owner_item(event, text, name))
+                owner_item = self._build_owner_item(event, text, name, domain)
+                if owner_item:
+                    items.append(owner_item)
+
+        # V1.15: dedup by (owner_name, key)
+        seen: set[tuple[str, str]] = set()
+        deduped: list[MemoryItem] = []
+        for it in items:
+            if it is None:
+                continue
+            sig = (it.current_value, it.key)
+            if sig in seen:
+                continue
+            seen.add(sig)
+            deduped.append(it)
+        items = deduped
 
         # Guard: no items or no ownership keyword at all → skip
         if not items:
@@ -539,34 +617,83 @@ class RuleBasedExtractor(BaseExtractor):
             return []
         return items
 
+    def _resolve_self_reference(self, name: str, event: dict) -> str:
+        """V1.16: 将自指代词替换为消息发送者真实姓名。
+
+        bot/app 身份的 sender 无效 → 返回空字符串（调用方跳过）。
+        """
+        if name in self._SELF_REFERENCE:
+            sender = event.get("sender", {}) or {}
+            sender_name = str(sender.get("name", ""))
+            if (sender_name and sender_name not in self._SELF_REFERENCE
+                    and not sender_name.startswith("bot(")
+                    and not sender_name.startswith("cli_")):
+                return sender_name
+            return ""  # bot sender → invalid
+        return name
+
     def _build_owner_item(
-        self, event: dict, text: str, owner: str,
+        self, event: dict, text: str, owner: str, domain: str = "",
     ) -> MemoryItem:
-        """Build a single owner-type MemoryItem."""
+        """Build a single owner-type MemoryItem.
+
+        V1.15: key 基于 domain 生成，支持多负责人共存。
+        """
+        owner = self._resolve_self_reference(owner, event)
+        if not owner:  # bot sender → skip
+            return None
+        if domain:
+            key = f"owner_{domain}"
+        else:
+            key = self._hash_key(f"owner_{owner}_{text[:40]}")[:16]
         return self._base_item(
-            event, text, "owner", "current_owner", owner,
+            event, text, "owner", key, owner,
             "Message assigns or updates project responsibility.",
             0.7, owner=owner,
         )
 
     def _extract_decision(self, event: dict, text: str) -> list[MemoryItem]:
-        """Extract key decisions and decision reversals from a message."""
+        """Extract key decisions and decision reversals from a message.
+
+        V1.15: 推断 decision_strength，区分讨论/偏好/暂定/确认。
+        """
         lowered = text.lower()
         decision_words = ("决定", "决策", "确定", "采用", "改为", "不再", "instead", "decide")
         if not any(word in lowered for word in decision_words):
             return []
-        key = "current_decision_override" if any(word in lowered for word in ("改为", "不再", "推翻", "instead")) else self._hash_key(text)
-        return [
-            self._base_item(
-                event,
-                text,
-                "decision",
-                key,
-                text,
-                "Message records a decision that can affect future execution.",
-                0.75,
-            )
-        ]
+
+        # V1.15: 推断决策强度
+        strength, confidence = self._infer_decision_strength(text)
+
+        is_override = any(word in lowered for word in ("改为", "不再", "推翻", "instead"))
+        key = "current_decision_override" if is_override else self._hash_key(text)
+
+        item = self._base_item(
+            event, text, "decision", key, text,
+            "Message records a decision that can affect future execution.",
+            confidence,
+        )
+        item.decision_strength = strength
+        if strength != "confirmed":
+            item.review_status = "needs_review"
+        return [item]
+
+    @staticmethod
+    def _infer_decision_strength(text: str) -> tuple[str, float]:
+        """Infer decision strength from signal words.
+
+        Returns (strength, confidence) tuple.
+        """
+        _SIGNALS = {
+            "discussion": (("考虑", "是否", "要不要", "打算", "商量", "讨论一下"), 0.55),
+            "preference": (("倾向于", "觉得", "还是", "建议", "推荐"), 0.65),
+            "tentative": (("那就先", "暂时", "先这样", "初步", "暂定", "先按"), 0.72),
+            "confirmed": (("确定", "就这么定了", "最终方案", "决定", "敲定", "定下来"), 0.85),
+        }
+        for strength, (signals, conf) in _SIGNALS.items():
+            if any(s in text for s in signals):
+                return strength, conf
+        return "tentative", 0.75
 
     def _extract_pause(self, event: dict, text: str) -> list[MemoryItem]:
         """Extract paused or deferred work items from a message."""
@@ -584,37 +711,70 @@ class RuleBasedExtractor(BaseExtractor):
             )
         ]
 
+    # V1.15: 阻塞解除信号——包含这些词的消息描述的是阻塞被解决
+    _BLOCKER_RESOLVE_SIGNALS = frozenset({
+        "解除", "解决", "通过了", "好了", "完成了", "搞定", "OK了", "没事了", "没问题了",
+    })
+
     def _extract_blocker(self, event: dict, text: str) -> list[MemoryItem]:
-        """Extract blockers, risks, or dependency constraints from a message."""
+        """Extract blockers, risks, or dependency constraints from a message.
+
+        V1.15: Populates metadata with blocker_status and structured fields.
+        V1.15: Skips messages that describe blocker resolution.
+        """
         lowered = text.lower()
         if not any(word in lowered for word in ("阻塞", "卡住", "风险", "依赖", "blocker", "blocked", "risk")):
             return []
-        return [
-            self._base_item(
-                event,
-                text,
-                "blocker",
-                self._hash_key(text),
-                text,
-                "Message identifies a blocker, risk, or dependency.",
-                0.7,
-            )
-        ]
+        # Skip messages describing resolution rather than discovery
+        if any(s in text for s in self._BLOCKER_RESOLVE_SIGNALS):
+            return []
+        item = self._base_item(
+            event, text, "blocker", self._hash_key(text), text,
+            "Message identifies a blocker, risk, or dependency.", 0.7,
+        )
+        sender_name = ""
+        sender = event.get("sender", {}) or {}
+        if isinstance(sender, dict):
+            sender_name = str(sender.get("name", sender.get("id", "")))
+        item.metadata = {
+            "blocker_status": "open",
+            "blocking_reason": text[:200],
+            "blocked_owner": item.owner or "",
+            "dependency_owner": "",
+            "acknowledged_by": "",
+            "resolved_by": "",
+            "resolved_at": "",
+            "blocked_item": "",
+        }
+        return [item]
 
     def _extract_next_step(self, event: dict, text: str) -> list[MemoryItem]:
-        """Extract next-step or task-like statements from a message."""
+        """Extract next-step or task-like statements from a message.
+
+        V1.15: Extracts action subject as owner (e.g. '李四需要做X' → owner='李四').
+        """
         lowered = text.lower()
         if not any(word in lowered for word in ("下一步", "待办", "todo", "需要", "请", "next")):
             return []
+
+        # V1.15: 尝试提取动作主语作为owner
+        owner = None
+        name_match = re.search(
+            r"([A-Za-z0-9_一-鿿]{1,20})"
+            r"\s*(?:需要|去|来|要|可以|准备|开始|负责|配合)"
+            r"\s*(?:做|完成|处理|沟通|设计|开发|写|改|修|部署|测试|跟|和|把)",
+            text,
+        )
+        if name_match:
+            name = name_match.group(1)
+            if name not in self._SELF_REFERENCE and not (name.isascii() and name.islower()):
+                owner = name
+
         return [
             self._base_item(
-                event,
-                text,
-                "next_step",
-                self._hash_key(text),
-                text,
+                event, text, "next_step", self._hash_key(text), text,
                 "Message suggests work that should influence the next action plan.",
-                0.62,
+                0.62, owner=owner,
             )
         ]
 
@@ -722,6 +882,15 @@ class RuleBasedExtractor(BaseExtractor):
         pattern = ".{0,2}".join(keyword)
         return bool(re.search(pattern, text))
 
+    @staticmethod
+    def _slugify(domain: str) -> str:
+        """Convert a domain description to a clean key-safe slug."""
+        import re as _re
+        slug = domain.strip()
+        slug = _re.sub(r"[^\w一-鿿]", "_", slug)
+        slug = _re.sub(r"_+", "_", slug).strip("_")
+        return slug[:30] if slug else ""
+
     def _hash_key(self, text: str) -> str:
         """Return a compact stable key for text-scoped memory items."""
         digest = hashlib.sha1(text.encode("utf-8")).hexdigest()[:12]
@@ -824,24 +993,14 @@ class HybridExtractor(BaseExtractor):
 
         # V1.11: 二次兜底 — LLM 和规则都几乎没提取，但触发了 LLM
         if not merged and self._needs_llm(rule_items, event_list):
-            # 生成一个低置信度的提示项，避免静默失败
             text_sample = str(
                 event_list[0].get("text", "") if event_list else ""
             )[:80]
-            from memory.schema import MemoryItem, source_ref_from_event
-            note = MemoryItem(
-                project_id=rule_items[0].project_id if rule_items else "default",
-                state_type="note",
-                key="unrecognized_signal",
-                current_value=f"[未识别] 检测到协作信号但无法确定类型: {text_sample}",
-                rationale="Hybrid 触发但规则和 LLM 均未提取。可能为新型隐式表达。",
-                owner=None,
-                status="active",
-                confidence=0.25,
-                source_refs=[source_ref_from_event(event_list[0], text_sample)]
-                if event_list else [],
+            import logging
+            _log = logging.getLogger(__name__)
+            _log.warning(
+                "Hybrid 触发但规则和 LLM 均未提取协作信号: %s", text_sample
             )
-            merged.append(note)
 
         return merged
 
@@ -906,6 +1065,30 @@ class HybridExtractor(BaseExtractor):
             for event in events:
                 text = str(event.get("text", "") or event.get("content", "") or "")
                 if any(kw in text for kw in ("需要", "下一步", "请", "可以", "试试")):
+                    return True
+
+        # (h) V1.15: 规则 item 内部存在"信任冲突"信号 → LLM 二次判断
+        for item in rule_items:
+            text = item.current_value if item.current_value else ""
+            if item.state_type == "owner":
+                if item.owner in ("我", "你", "他", "她", "我们", "他们", "大家"):
+                    return True
+                if len(item.owner) == 1 and item.owner not in ("张", "王", "李",
+                        "赵", "刘", "陈", "杨", "黄", "吴", "周"):
+                    return True  # 单字且非姓氏 → 可能是误提取
+            if item.state_type == "blocker":
+                _conflict = ("解除", "解决", "通过了", "好了", "完成了",
+                            "搞定", "OK了", "不阻塞", "但是", "但", "虽然", "不过")
+                if any(w in text for w in _conflict):
+                    return True
+            if item.state_type == "decision":
+                _vague = ("不确定", "可能", "也许", "看看", "试试", "再说")
+                if any(w in text for w in _vague):
+                    return True
+            if item.confidence > 0.7:
+                _neg_question = ("不确定", "不认为", "没觉得", "是真的吗",
+                                 "对吗", "吗？", "？")
+                if any(w in text for w in _neg_question):
                     return True
 
         return False

@@ -51,6 +51,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sync-minutes", action="store_true", help="同步最近会议纪要")
     parser.add_argument("--sync-approvals", action="store_true", help="同步进行中的审批")
     parser.add_argument("--identity", default="bot", help="消息发送身份: bot (默认) / user")
+    parser.add_argument("--execute-actions", action="store_true",
+                        help="提取后执行行动计划（创建任务/文档，发送提醒）")
+    parser.add_argument("--auto-confirm", action="store_true",
+                        help="自动确认操作，跳过 requires_confirmation 检查")
+    parser.add_argument("--standup", action="store_true",
+                        help="输出站会摘要格式（昨日/今日/阻塞）替代状态面板")
+    parser.add_argument("--confirm-checklist", action="store_true",
+                        help="会议纪要后发送确认清单到群")
+    parser.add_argument("--trigger", action="store_true",
+                        help="启用触发引擎（基于 diff 自动检测并生成动作提案）")
+    parser.add_argument("--mode", default="preview",
+                        choices=["preview", "confirm", "auto"],
+                        help="触发引擎模式: preview(仅显示) / confirm(逐条确认) / auto(自动执行)")
     return parser.parse_args()
 
 
@@ -227,6 +240,14 @@ def main() -> None:
         try:
             min_items = engine.sync_minutes(start, end, project_id=args.project_id)
             print(f"    纪要提取到 {len(min_items)} 条记忆\n")
+            if args.confirm_checklist and min_items:
+                from memory.project_state import render_confirmation_checklist
+                checklist = render_confirmation_checklist(min_items)
+                print(f"    确认清单:\n{checklist}")
+                if not args.dry_run:
+                    adapter.send_message(args.chat_id, _markdown_safe(checklist),
+                                         msg_type="markdown")
+                    print("    确认清单已发送到群")
         except RuntimeError as e:
             print(f"    纪要同步失败: {e}\n")
     if args.sync_approvals:
@@ -244,6 +265,117 @@ def main() -> None:
     # 重新获取最新 items（可能包含文档/任务新增的）
     items = store.list_items(args.project_id)
 
+    # ── Step 3.5: 可选 — 触发引擎 / 手动执行 ─────────────────────
+    action_results: list[tuple] = []
+    if args.trigger:
+        print("[3.5/5] 触发引擎扫描...")
+        from memory.action_trigger import ActionTrigger
+        from memory.action_executor import ActionExecutor
+
+        diff = getattr(engine, "last_diff", None) or {
+            "created": [], "updated": [], "unchanged": [],
+        }
+        trigger = ActionTrigger(
+            engine=engine,
+            log_path=str(Path(args.data_dir) / "action_log.jsonl"),
+        )
+        proposals = trigger.scan(diff, args.project_id, args.chat_id, mode=args.mode)
+        print(f"    生成 {len(proposals)} 个动作提案：")
+        for p in proposals:
+            tag = {"low": "[OK]", "medium": "[!!]", "high": "[!!HIGH]"} \
+                .get(p.risk_level, "->")
+            safe_title = p.title.encode("ascii", errors="replace").decode("ascii")
+            print(f"      {tag} [{p.risk_level}] {p.action_type}: {safe_title[:70]}")
+
+        if args.mode == "preview":
+            print("    (preview 模式，不执行)\n")
+            action_results = [
+                (p.action_type, False, "preview mode — not executed", {})
+                for p in proposals
+            ]
+        else:
+            auto_confirm = args.mode == "auto"
+            executor = ActionExecutor(adapter, auto_confirm=auto_confirm)
+            owner_map: dict[str, str] = {}
+            for p in proposals:
+                if p.target_owner_open_id and p.target_owner:
+                    owner_map[p.target_owner] = p.target_owner_open_id
+            exec_context = {
+                "chat_id": args.chat_id,
+                "project_id": args.project_id,
+                "owner_map": owner_map,
+            }
+            # Convert ActionProposal → PlannedAction for executor
+            from memory.action_planner import PlannedAction
+            planned = []
+            for p in proposals:
+                planned.append(PlannedAction(
+                    action_type="send_message" if p.action_type == "send_alert" else p.action_type,
+                    title=p.metadata.get("alert_detail", p.title),
+                    reason=p.reason,
+                    command_hint="",
+                    requires_confirmation=p.requires_confirmation,
+                    metadata=p.metadata,
+                ))
+            results = executor.execute_plan(planned, exec_context)
+            trigger.write_results(results, args.project_id)
+
+            executed = sum(1 for r in results if r.success)
+            blocked = sum(1 for r in results
+                          if not r.success and "confirmation" in r.error)
+            failed = sum(1 for r in results
+                         if not r.success and "confirmation" not in r.error)
+            print(f"    结果：{executed} 已执行，{blocked} 需确认，{failed} 失败\n")
+            action_results = [
+                (r.action.action_type, r.success, r.error, r.output_data)
+                for r in results
+            ]
+
+    elif args.execute_actions:
+        print("[3.5/5] 生成并执行行动计划...")
+        from memory.action_planner import generate_action_plan
+        from memory.action_executor import ActionExecutor
+
+        plan = generate_action_plan(args.project_id, items)
+        print(f"    生成了 {len(plan)} 个计划操作")
+
+        # 构建 owner_map：解析 owner 姓名为 open_id，用于 @提醒
+        owner_map: dict[str, str] = {}
+        for item in items:
+            if item.owner and item.state_type in ("owner", "next_step", "blocker"):
+                if item.owner not in owner_map:
+                    open_id = engine.resolve_owner_open_id(item.owner)
+                    if open_id:
+                        owner_map[item.owner] = open_id
+
+        executor = ActionExecutor(adapter, auto_confirm=args.auto_confirm)
+        exec_context = {
+            "chat_id": args.chat_id,
+            "project_id": args.project_id,
+            "owner_map": owner_map,
+        }
+        results = executor.execute_plan(plan, exec_context)
+
+        executed = sum(1 for r in results if r.success)
+        blocked = sum(1 for r in results
+                      if not r.success and "confirmation" in r.error)
+        failed = sum(1 for r in results
+                     if not r.success and "confirmation" not in r.error)
+        print(f"    结果：{executed} 已执行，{blocked} 需确认，{failed} 失败")
+        for r in results:
+            if r.success:
+                detail = ""
+                if r.output_data:
+                    detail = f" → {r.output_data}"
+                print(f"      OK {r.action.action_type}: {r.action.title[:60]}{detail}")
+            elif not r.success:
+                print(f"      -- {r.action.action_type}: {r.error[:80]}")
+        action_results = [
+            (r.action.action_type, r.success, r.error, r.output_data)
+            for r in results
+        ]
+        print()
+
     # ── Step 4: 生成状态面板 ────────────────────────────────────
     print("[4/5] 生成状态面板...")
     from memory.project_state import (
@@ -253,7 +385,11 @@ def main() -> None:
         render_personal_context_text,
     )
 
-    if args.personal:
+    if args.standup:
+        from memory.project_state import render_standup_summary
+        panel_text = render_standup_summary(items, args.project_id)
+        panel_type = "站会摘要"
+    elif args.personal:
         ctx = build_personal_work_context(args.personal, args.project_id, items)
         panel_text = render_personal_context_text(ctx)
         panel_type = f"个人上下文 ({args.personal})"
@@ -264,6 +400,23 @@ def main() -> None:
 
     if not items:
         panel_text = f"当前项目 ({args.project_id}) 暂无提取到的协作记忆。请先在群内讨论后重试。\n"
+
+    # 附加执行结果摘要
+    if action_results:
+        executed = sum(1 for _, ok, _, _ in action_results if ok)
+        blocked = sum(1 for _, _, err, _ in action_results
+                      if not err == "" and "confirmation" in err)
+        failed = sum(1 for _, ok, err, _ in action_results
+                     if not ok and "confirmation" not in err)
+        panel_text += (
+            f"\n---\n"
+            f"*行动计划执行完毕：{executed} 成功"
+        )
+        if blocked:
+            panel_text += f"，{blocked} 需确认"
+        if failed:
+            panel_text += f"，{failed} 失败"
+        panel_text += "。*\n"
 
     print(f"    {panel_type}已生成 ({len(panel_text)} 字符)\n")
 

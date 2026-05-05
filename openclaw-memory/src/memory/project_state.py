@@ -74,16 +74,22 @@ def build_group_project_state(
                 "role": item.state_type,
             })
 
-    # Decisions：区分"已确认"和"待定"
+    # Decisions：按 decision_strength 区分"已确认"和"待定"
     all_decisions = by_type.get("decision", [])
     recent_decisions: list[dict[str, Any]] = []
     open_decisions: list[dict[str, Any]] = []
     for item in all_decisions:
         val = item.current_value
+        # 跳过 needs_review 和冲突中的决策——审核前不显示在面板
+        if getattr(item, "review_status", "") == "needs_review":
+            continue
+        item_meta = getattr(item, "metadata", None) or {}
+        if item_meta.get("conflict_status") == "conflicting":
+            continue
         decision_entry = {
             "id": item.memory_id,
             "title": val[:120],
-            "status": "confirmed" if item.status == "active" else item.status,
+            "status": "confirmed",
             "decided_at": item.updated_at,
             "source_refs": [
                 {"message_id": ref.message_id, "excerpt": ref.excerpt[:60],
@@ -91,13 +97,22 @@ def build_group_project_state(
                 for ref in item.source_refs
             ],
         }
-        # 简单判定：含"待定/考虑/是否" 视为未定案
-        if any(kw in val for kw in ("待定", "考虑", "是否", "讨论")):
+        ds = getattr(item, "decision_strength", "")
+        if ds == "confirmed":
+            decision_entry["status"] = "confirmed"
+            recent_decisions.append(decision_entry)
+        elif ds == "discussion":
+            continue  # 讨论级别不显示
+        elif ds in ("tentative", "preference"):
             decision_entry["status"] = "open"
             open_decisions.append(decision_entry)
         else:
-            decision_entry["status"] = "confirmed"
-            recent_decisions.append(decision_entry)
+            # 旧数据兼容：按关键词判断
+            if any(kw in val for kw in ("待定", "考虑", "是否", "讨论")):
+                decision_entry["status"] = "open"
+                open_decisions.append(decision_entry)
+            else:
+                recent_decisions.append(decision_entry)
 
     # Active tasks：next_step 或有 owner 的记忆
     active_tasks: list[dict[str, Any]] = []
@@ -115,19 +130,27 @@ def build_group_project_state(
             ],
         })
 
-    # Risks / blockers
+    # Risks / blockers (V1.15: split by blocker_status)
     risks: list[dict[str, Any]] = []
+    resolved_blockers: list[dict[str, Any]] = []
     for item in by_type.get("blocker", []):
-        risks.append({
+        meta = getattr(item, "metadata", None) or {}
+        bs = meta.get("blocker_status", "open")
+        entry = {
             "id": item.memory_id,
             "description": item.current_value[:200],
             "severity": "high" if "严重" in item.current_value else "medium",
+            "blocker_status": bs,
             "source_refs": [
                 {"message_id": ref.message_id, "excerpt": ref.excerpt[:60],
                  "sender": ref.sender_name, "url": ref.source_url}
                 for ref in item.source_refs
             ],
-        })
+        }
+        if bs in ("resolved", "obsolete"):
+            resolved_blockers.append(entry)
+        else:
+            risks.append(entry)
 
     # Next actions with owner
     next_actions: list[dict[str, Any]] = []
@@ -158,6 +181,7 @@ def build_group_project_state(
         "open_decisions": open_decisions,
         "active_tasks": active_tasks,
         "risks": risks,
+        "resolved_blockers": resolved_blockers,
         "next_actions": next_actions,
     }
 
@@ -223,8 +247,18 @@ def render_group_state_panel_text(state: dict[str, Any]) -> str:
         lines.append("⚠️ 风险与阻塞")
         for r in risks:
             severity = r.get("severity", "medium")
-            icon = "🔴" if severity == "high" else "🟡"
-            lines.append(f"- {icon} {r.get('description', '')}")
+            bs = r.get("blocker_status", "open")
+            status_label = {"acknowledged": "[已确认]", "waiting_external": "[等待外部]"}.get(bs, "")
+            icon = "[HIGH]" if severity == "high" else "[MED]"
+            lines.append(f"- {icon} {r.get('description', '')} {status_label}")
+        lines.append("")
+
+    # Recently resolved blockers
+    resolved = state.get("resolved_blockers", [])
+    if resolved:
+        lines.append("✅ 最近已解决")
+        for r in resolved[:5]:
+            lines.append(f"- {r.get('description', '')}")
         lines.append("")
 
     # Next actions
@@ -655,5 +689,114 @@ def render_cross_project_text(ctx: dict[str, Any]) -> str:
     else:
         lines.insert(1, f"共 {len(projects)} 个项目，{total_tasks} 个任务，{total_blockers} 个阻塞")
         lines.insert(2, "")
+
+    return "\n".join(lines).strip() + "\n"
+
+
+# ── V1.15: 站会摘要 ────────────────────────────────────────────
+
+def render_standup_summary(
+    items: list[MemoryItem],
+    project_id: str = "",
+    project_title: str = "",
+) -> str:
+    """Generate a standup-format summary: yesterday / today / blockers."""
+    from datetime import datetime, timedelta, timezone
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+
+    lines = [f"## 今日站会 — {project_title or project_id}", ""]
+
+    yesterday: list[str] = []
+    for item in items:
+        if item.updated_at and item.updated_at > cutoff:
+            yesterday.append(f"- {item.current_value[:80]} [{item.state_type}]")
+        meta = getattr(item, "metadata", None) or {}
+        if meta.get("blocker_status") == "resolved":
+            resolved_at = meta.get("resolved_at", "")
+            if resolved_at and resolved_at > cutoff:
+                resolved_by = meta.get("resolved_by", "")
+                yesterday.append(f"- ✅ 已解决: {item.current_value[:80]} ({resolved_by})")
+
+    lines.append("### 昨日进展")
+    if yesterday:
+        lines.extend(yesterday[:10])
+    else:
+        lines.append("- (无记录)")
+    lines.append("")
+
+    today = [i for i in items if i.state_type == "next_step" and i.status == "active"]
+    today.sort(key=lambda i: (0 if i.owner else 1, -(i.confidence)))
+    lines.append("### 今日计划")
+    if today:
+        for t in today[:10]:
+            owner_hint = f"（{t.owner}）" if t.owner else ""
+            lines.append(f"- {t.current_value[:100]}{owner_hint}")
+    else:
+        lines.append("- (无计划)")
+    lines.append("")
+
+    blockers = [i for i in items if i.state_type == "blocker" and i.status == "active"]
+    unresolved = []
+    for b in blockers:
+        meta = getattr(b, "metadata", None) or {}
+        if meta.get("blocker_status", "open") in ("open", "acknowledged", "waiting_external"):
+            unresolved.append(b)
+    lines.append("### 阻塞与风险")
+    if unresolved:
+        for b in unresolved[:10]:
+            meta = getattr(b, "metadata", None) or {}
+            bs = meta.get("blocker_status", "open")
+            status_hint = {"acknowledged": "[已接]", "waiting_external": "[等外部]"}.get(bs, "")
+            lines.append(f"- {b.current_value[:100]} {status_hint}")
+    else:
+        lines.append("- (无阻塞)")
+    lines.append("")
+
+    return "\n".join(lines).strip() + "\n"
+
+
+# ── V1.15: 确认清单 ────────────────────────────────────────────
+
+def render_confirmation_checklist(
+    items: list[MemoryItem],
+    title: str = "会议纪要",
+) -> str:
+    """Generate a markdown confirmation checklist from extracted memory items."""
+    lines = [f"## 确认清单 — {title}", ""]
+
+    decisions = [i for i in items if i.state_type == "decision"]
+    next_steps = [i for i in items if i.state_type == "next_step"]
+    blockers = [i for i in items if i.state_type == "blocker"]
+
+    if decisions:
+        lines.append("### 识别到以下决策，请确认：")
+        for j, d in enumerate(decisions[:5], 1):
+            ref = d.source_refs[0] if d.source_refs else None
+            evidence = f" [{ref.sender_name} {ref.created_at[:16]}]" if ref else ""
+            ds = getattr(d, "decision_strength", "")
+            ds_label = f" ({ds})" if ds else ""
+            lines.append(f"{j}. {d.current_value[:120]}{ds_label}{evidence}")
+        lines.append("")
+
+    if next_steps:
+        lines.append("### 识别到以下待办：")
+        for j, ns in enumerate(next_steps[:10], 1):
+            owner = ns.owner or "(待分配)"
+            ref = ns.source_refs[0] if ns.source_refs else None
+            evidence = f" [{ref.sender_name}]" if ref else ""
+            lines.append(f"{j}. {owner}：{ns.current_value[:100]}{evidence}")
+        lines.append("")
+
+    if blockers:
+        lines.append("### 识别到以下风险：")
+        for j, b in enumerate(blockers[:5], 1):
+            ref = b.source_refs[0] if b.source_refs else None
+            evidence = f" [{ref.sender_name}]" if ref else ""
+            lines.append(f"{j}. {b.current_value[:120]}{evidence}")
+        lines.append("")
+
+    lines.append("---")
+    lines.append("请回复确认或修改：确认全部回复\"确认\"，修改某项回复\"修改 N. 改为XXX\"")
 
     return "\n".join(lines).strip() + "\n"

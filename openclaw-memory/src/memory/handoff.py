@@ -34,7 +34,11 @@ def generate_handoff(project_id: str, items: Iterable[MemoryItem]) -> str:
             lines.extend(["- 暂无明确状态。", ""])
             continue
         for item in state_items:
-            lines.append(f"- **{item.current_value}**")
+            ds = getattr(item, "decision_strength", "")
+            rs = getattr(item, "review_status", "")
+            strength_label = f" [{ds}]" if ds else ""
+            review_label = " ⚠️待审核" if rs == "needs_review" else ""
+            lines.append(f"- **{item.current_value}**{strength_label}{review_label}")
             lines.append(f"  - 依据：{item.rationale}")
             lines.append(f"  - 置信度：{item.confidence:.2f}，版本：v{item.version}")
             lines.append(f"  - 证据：{_render_refs(item.source_refs)}")

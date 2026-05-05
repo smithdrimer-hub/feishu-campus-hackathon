@@ -79,6 +79,10 @@ class MemoryItem:
     valid_from: str = ""      # 空字符串兼容旧数据
     valid_to: str | None = None
     recorded_at: str = field(default_factory=utc_now_iso)
+    # V1.15 P0: 可信度字段
+    decision_strength: str = ""  # discussion | preference | tentative | confirmed
+    review_status: str = ""      # auto_approved | needs_review | approved | rejected
+    metadata: dict[str, Any] = field(default_factory=dict)  # 扩展字段（blocker_status 等）
 
     def identity_key(self) -> str:
         """Return the stable key used to decide whether this item supersedes another."""
@@ -114,6 +118,9 @@ class MemoryItem:
             valid_from=str(data.get("valid_from", "")),
             valid_to=data.get("valid_to"),
             recorded_at=str(data.get("recorded_at", utc_now_iso())),
+            decision_strength=str(data.get("decision_strength", "")),
+            review_status=str(data.get("review_status", "")),
+            metadata=dict(data.get("metadata", {}) or {}),
         )
 
 

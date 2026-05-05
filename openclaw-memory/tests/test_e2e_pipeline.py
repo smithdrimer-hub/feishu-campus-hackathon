@@ -57,6 +57,17 @@ class MockAdapter:
             return _mock_result(0, {})
         return _mock_result(1, {}, err="unpin failed")
 
+    def create_task(self, summary, description="", due_at="", identity="bot"):
+        return _mock_result(0, {"data": {"guid": "task_e2e_001", "summary": summary}})
+
+    def create_doc(self, title, content="", identity="bot"):
+        return _mock_result(0, {
+            "data": {"document_id": "doc_e2e_001", "url": f"https://feishu.cn/docx/doc_e2e_001"}
+        })
+
+    def assign_task(self, task_guid, assignee_ids, identity="bot"):
+        return _mock_result(0, {"data": {"success": True}})
+
     def fetch_doc(self, doc_id):
         return _mock_result(0, {
             "data": {
@@ -243,7 +254,19 @@ class TestE2EPipelineWithMock(unittest.TestCase):
             state = build_group_project_state("test", items)
             self.assertEqual(state["project_id"], "test")
             self.assertGreater(len(state["owners"]), 0, "Should have at least one owner")
-            self.assertGreater(len(state["recent_decisions"]), 0, "Should have at least one decision")
+            # V1.15: needs_review decisions are excluded from state panel
+            # Check that decision items exist in store (not necessarily in panel)
+            decisions_in_store = [i for i in items if i.state_type == "decision"]
+            self.assertGreater(len(decisions_in_store), 0,
+                               "Should have at least one decision in store")
+            needs_review = [i for i in decisions_in_store
+                           if getattr(i, "review_status", "") == "needs_review"]
+            if needs_review:
+                self.assertGreater(len(needs_review), 0,
+                                   "Tentative decisions should be needs_review")
+            else:
+                total_decisions = len(state["recent_decisions"]) + len(state.get("open_decisions", []))
+                self.assertGreater(total_decisions, 0, "Should have decisions in panel")
             self.assertGreater(len(state["risks"]), 0, "Should have at least one risk")
 
             text = render_group_state_panel_text(state)

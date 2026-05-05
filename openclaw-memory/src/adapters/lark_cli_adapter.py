@@ -248,6 +248,71 @@ class LarkCliAdapter:
             allow_write=True,
         )
 
+    # ── V1.14 写入操作扩展 ──────────────────────────────────────
+
+    def create_task(
+        self,
+        summary: str,
+        description: str = "",
+        due_at: str = "",
+        identity: str = "user",
+    ) -> CliResult:
+        """Create a Feishu task.
+
+        Args:
+            summary: Task title (required).
+            description: Optional longer body text.
+            due_at: ISO-8601 deadline, e.g. "2026-05-10T00:00:00Z".
+            identity: "bot" (default) or "user".
+        """
+        args = ["task", "+create", "--summary", summary, "--as", identity, "--format", "json"]
+        if description:
+            args.extend(["--description", description])
+        if due_at:
+            args.extend(["--due", due_at])
+        return self.run(args, allow_write=True)
+
+    def create_doc(
+        self,
+        title: str,
+        content: str = "",
+        identity: str = "user",
+    ) -> CliResult:
+        """Create a Feishu document.
+
+        WARNING: Every call creates a real document. --dry-run is BLOCKED
+        by SafetyPolicy (it previously created real documents).
+
+        Args:
+            title: Document title.
+            content: Optional markdown body text.
+            identity: "bot" (default) or "user".
+        """
+        args = ["docs", "+create", "--title", title, "--as", identity]
+        if content:
+            args.extend(["--markdown", content])
+        return self.run(args, allow_write=True)
+
+    def assign_task(
+        self,
+        task_guid: str,
+        assignee_ids: list[str],
+        identity: str = "bot",
+    ) -> CliResult:
+        """Assign an existing task to one or more Feishu users.
+
+        Args:
+            task_guid: The task's unique GUID from create_task or search_tasks.
+            assignee_ids: List of Feishu open_ids (ou_xxx).
+            identity: "bot" (default) or "user".
+        """
+        args = [
+            "task", "+assign", "--task-guid", task_guid,
+            "--assignee-ids", ",".join(assignee_ids),
+            "--as", identity, "--format", "json",
+        ]
+        return self.run(args, allow_write=True)
+
     def search_contact(self, query: str) -> CliResult:
         """V1.12: 按姓名搜索飞书用户，返回 open_id/name。
 
@@ -306,6 +371,35 @@ class LarkCliAdapter:
              "--params", params],
         )
 
+    # ── V1.13 日历/会议/审批 ───────────────────────────────────
+
+    def list_calendar_events(self, start: str, end: str) -> CliResult:
+        return self.run(
+            ["calendar", "+agenda", "--start", start, "--end", end,
+             "--format", "json"],
+        )
+
+    def search_minutes(self, start: str, end: str, page_size: int = 10) -> CliResult:
+        return self.run(
+            ["minutes", "+search", "--start", start, "--end", end,
+             "--page-size", str(page_size), "--format", "json"],
+        )
+
+    def get_minute_detail(self, minute_token: str) -> CliResult:
+        return self.run(
+            ["minutes", "minutes", "get", "--token", minute_token,
+             "--format", "json"],
+        )
+
+    def list_approval_instances(self, status: str = "pending",
+                                 page_size: int = 10) -> CliResult:
+        import json
+        params = json.dumps({"status": status, "page_size": page_size})
+        return self.run(
+            ["approval", "instances", "initiated", "--as", "user",
+             "--params", params],
+        )
+
     def _parse_json(self, stdout: str) -> Any | None:
         """Parse stdout as JSON and return None when parsing fails."""
         text = stdout.strip()
@@ -337,24 +431,22 @@ def _extract_doc_token(doc: str) -> str:
             return token.strip()
     return doc
 
+
     # ── V1.13 日历/会议/审批 ───────────────────────────────────
 
     def list_calendar_events(self, start: str, end: str) -> CliResult:
-        """V1.13: 查询日历日程。"""
         return self.run(
             ["calendar", "+agenda", "--start", start, "--end", end,
              "--format", "json"],
         )
 
     def search_minutes(self, start: str, end: str, page_size: int = 10) -> CliResult:
-        """V1.13: 搜索会议纪要。"""
         return self.run(
             ["minutes", "+search", "--start", start, "--end", end,
              "--page-size", str(page_size), "--format", "json"],
         )
 
     def get_minute_detail(self, minute_token: str) -> CliResult:
-        """V1.13: 获取单条会议纪要详情（含 summary, action_items）。"""
         return self.run(
             ["minutes", "minutes", "get", "--token", minute_token,
              "--format", "json"],
@@ -362,10 +454,26 @@ def _extract_doc_token(doc: str) -> str:
 
     def list_approval_instances(self, status: str = "pending",
                                  page_size: int = 10) -> CliResult:
-        """V1.13: 查询审批实例列表。status: pending/approved/rejected。"""
         import json
         params = json.dumps({"status": status, "page_size": page_size})
         return self.run(
             ["approval", "instances", "initiated", "--as", "user",
              "--params", params],
         )
+
+
+def compose_at_mention(open_id: str, display_name: str = "") -> str:
+    """Compose a Feishu @mention XML tag for embedding in message content.
+
+    Feishu IM API renders <at user_id="...">Name</at> as clickable user
+    mentions in both text and markdown messages.
+
+    Args:
+        open_id: Feishu open_id of the user (ou_xxx).
+        display_name: Human-readable name. Falls back to open_id when empty.
+
+    Returns:
+        XML snippet like: <at user_id="ou_xxx">张三</at>
+    """
+    name = display_name or open_id
+    return f'<at user_id="{open_id}">{name}</at>'

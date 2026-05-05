@@ -55,7 +55,7 @@ class ConflictResolutionTest(unittest.TestCase):
         first = make_owner("Alice", "om_1")
         store.upsert_items([first])
         second = make_owner("Bob", "om_2")
-        active = store.upsert_items([second])
+        active, _ = store.upsert_items([second])
         owners = [item for item in active if item.state_type == "owner"]
         self.assertEqual(len(owners), 1)
         self.assertEqual(owners[0].current_value, "Bob")
