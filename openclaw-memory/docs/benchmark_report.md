@@ -225,13 +225,41 @@ lark-cli 发送 (含 retry)
 
 ## 8. 三模式对比（Golden Set）
 
+### 8.1 总体通过率
+
 | 模式 | 通过率 | 单条延迟 | LLM 调用率 | 适用场景 |
 |------|--------|---------|----------|--------|
-| RuleOnly | 150/150 = 100.0% | 0.5 ms | 0% | 离线评测 / 关键词明确场景 |
-| **Hybrid** | **147/150 = 98.0%** | 6 s | ~40% | **生产推荐**（性价比平衡）|
+| RuleOnly | 150/150 = 100.0% | **0.2 ms** ([demo_benchmark.py](../scripts/demo_benchmark.py) 实测) | 0% | 离线评测 / 关键词明确场景 |
+| **Hybrid** | **147/150 = 98.0%** | ~6 s | ~40% | **生产推荐**（性价比平衡）|
 | LLM-only | （需 key 测试）| 8-10 s | 100% | 极致语义覆盖（成本高 2x）|
 
 3 条 Hybrid 失败案例：GS-031 / GS-116 / GS-119 — temperature=0.1 引入的非确定性，已识别可消除。
+
+### 8.2 按 state_type 的精度/召回（RuleOnly，[run_golden_eval.py](../scripts/run_golden_eval.py) 实测）
+
+| state_type | Precision | Recall | F1 | TP | FP | FN | 评价 |
+|-----------|----------|--------|-----|----|----|----|------|
+| `blocker` | 1.00 | 1.00 | **1.00** | 16 | 0 | 0 | 完美 |
+| `deadline` | 1.00 | 1.00 | **1.00** | 8 | 0 | 0 | 完美 |
+| `decision` | 1.00 | 1.00 | **1.00** | 29 | 0 | 0 | 完美（含 strength 分层）|
+| `deferred` | 0.80 | 1.00 | 0.89 | 4 | **1** | 0 | 1 个误报 |
+| `member_status` | 1.00 | 1.00 | **1.00** | 8 | 0 | 0 | V1.6 后实现 |
+| `next_step` | 0.65 | 1.00 | 0.79 | 13 | **7** | 0 | **薄弱环节** — Hybrid Selector 模式针对此类 |
+| `owner` | 1.00 | 1.00 | **1.00** | 24 | 0 | 0 | 5 种 owner 格式 |
+| `project_goal` | 1.00 | 1.00 | **1.00** | 10 | 0 | 0 | 完美 |
+
+**关键观察**：`next_step` Precision 0.65 是规则模式的薄弱环节（"请/需要/记得"误判常见）。这正是 V1.17 引入 **Selector 模式 + Hybrid 必要性**的论据——把 next_step 委托给 LLM 可消除假阳性。
+
+### 8.3 Hybrid 延迟实测（demo_benchmark.py，DeepSeek-chat）
+
+```
+RuleOnly  : median=4ms  avg=7ms   per_msg=0.2ms     (20 条，3 次中位数)
+Hybrid    : median=6.2s avg=6.7s  per_msg=310ms    (20 条，3 次中位数)
+```
+
+**结论**：Hybrid 大约 1500x slower than RuleOnly，但 LLM 仅约 40% 调用率，所以**实际成本差距 ~600x**。生产建议：
+- 关键词明确路径走 RuleOnly（毫秒级），保住吞吐量
+- 模糊语义路径走 Hybrid（数秒），保住覆盖率
 
 ---
 
