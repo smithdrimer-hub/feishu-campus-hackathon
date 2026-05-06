@@ -263,6 +263,75 @@ Hybrid    : median=6.2s avg=6.7s  per_msg=310ms    (20 条，3 次中位数)
 
 ---
 
+## 8.4 Bi-temporal `as_of` 时间旅行（赛题原话"理解时序"）
+
+> "证明系统能理解时序。"
+
+**测试**：用 `examples/movie_demo_scenario.jsonl`（Day1=2026-05-04 → Day3=2026-05-06，含 26 条事件）。把每条 MemoryItem 的 `valid_from` 设为其首条 source ref 的 `created_at`，然后用 `MemoryStore.list_items(project_id, as_of=...)` 查不同时间点的"项目状态快照"。
+
+**实测结果**：
+
+| as_of 时间点 | 阶段 | memories | 类型分布 |
+|------------|-----|---------|---------|
+| `2026-05-04T12:00` | Day 1 中午 | **3** | decision×1, owner×2（仅"用微信支付"决策）|
+| `2026-05-04T18:30` | Day 1 末 | 3 | 同上（傍晚没有新事件）|
+| `2026-05-05T18:30` | Day 2 末 | **11** | +blocker×2, +deferred×1, +member_status×1, +decision×1（"国际化先不做"）, +next_step×3 |
+| `2026-05-06T16:00` | Day 3 现在 | **14** | +blocker×1, +deadline×1, +owner×1（完整状态）|
+
+**结论**：可以**回放任意历史时间点的项目状态**。新人入职时不只看到"现在"，还可以看"1 周前我们在哪、3 天前讨论了什么"。这是赛题"理解时序"的硬证据：
+
+```python
+# 接手者上手前看 1 周前的状态
+snapshot_a_week_ago = store.list_items("my-project", as_of="2026-05-04T12:00:00")
+# 接手者看现在
+snapshot_now = store.list_items("my-project")
+# diff 出"我不在期间发生了什么"
+```
+
+数据模型支撑（[`schema.py`](../src/memory/schema.py)）：
+- `valid_from` — 业务上从何时成立（来自原始消息时间戳）
+- `valid_to` — 业务上何时失效（active item = None）
+- `recorded_at` — 系统抽取/写入时间
+
+三字段构成 bi-temporal 模型，支持"as of business time"查询。
+
+---
+
+## 8.5 证据链可审计性（[`demo_evidence_trace.py`](../scripts/demo_evidence_trace.py)）
+
+**测试**：用 `examples/movie_demo_scenario.jsonl` 提取产生的 14 条 active memory + 1 条历史 memory，运行 evidence trace tree 模式。
+
+**实测输出片段**（真实截取）：
+
+```
+证据链: 项目 movie-demo
+活跃记忆: 14 条 | 历史记忆: 1 条
+
+  [owner] 吴凡
+    confidence=0.7 version=1
+    ├── message: 前端-吴凡 @ 2026-05-04T09:05:00
+    │   "前端我和小杨分，吴凡负责商品列表和购物车，小杨负责支付和订单"
+    │   https://app.feishu.cn/client/messages/oc_movie/mv_002
+
+  [next_step] 登录页和支付页UI需要重做v2
+    confidence=0.85 version=1
+    ├── message: 产品-何璐 @ 2026-05-05T09:30:00
+    │   "登录页和支付页 UI 都需要重做 v2"
+    │   https://app.feishu.cn/client/messages/oc_movie/mv_011
+
+  [decision] 支付走微信支付，不接支付宝
+    confidence=0.95 version=1
+    ├── message: 产品-何璐 @ 2026-05-04T10:00:00
+    │   "决策：支付走微信支付，不接支付宝，产品已确认"
+    │   https://app.feishu.cn/client/messages/oc_movie/mv_005
+```
+
+**结论**：每条记忆可追溯到**具体飞书消息（含发送者 + 时间 + URL）**。点击 URL 直接跳转飞书原文。`--check-unverified` 模式还会列出无证据来源的记忆（应为 0）。
+
+支撑能力：[`MemoryStore.find_items_by_message_id()`](../src/memory/store.py)、[`SourceRef.source_url`](../src/memory/schema.py) 飞书深链生成、`candidate.py` 的 excerpt 原文锚点验证（LLM 幻觉时自动用原文替代）。
+
+---
+
 ## 9. Pattern Memory 触发率（V1.18）
 
 `movie_demo_scenario.jsonl`（26 条故意构造数据）实测：

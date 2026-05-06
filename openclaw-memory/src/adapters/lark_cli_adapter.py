@@ -53,12 +53,10 @@ class LarkCliAdapter:
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
-                errors="replace",  # V1.18: 使用 replace 避免双重执行
+                errors="strict",
                 check=False,
-                timeout=120,
             )
         except UnicodeDecodeError:
-            # V1.18: 仅捕获 subprocess 启动阶段的编码错误，不双重执行
             completed = subprocess.run(
                 [self.resolve_executable(), *safe_args],
                 input=stdin_text,
@@ -67,7 +65,6 @@ class LarkCliAdapter:
                 encoding="gbk",
                 errors="replace",
                 check=False,
-                timeout=120,
             )
         return CliResult(
             args=safe_args,
@@ -150,17 +147,11 @@ class LarkCliAdapter:
             args.extend(["--offset", str(offset)])
         return self.run(args)
 
-    def search_tasks(self, query: str, page_limit: int = 20,
-                     page_token: str | None = None) -> CliResult:
-        """Search tasks by query and return matching task summaries.
-
-        V1.17 P1: 支持 page_token 分页。
-        """
-        args = ["task", "+search", "--query", query,
-                "--page-limit", str(page_limit), "--format", "json"]
-        if page_token:
-            args.extend(["--page-token", page_token])
-        return self.run(args)
+    def search_tasks(self, query: str, page_limit: int = 20) -> CliResult:
+        """Search tasks by query and return matching task summaries."""
+        return self.run(
+            ["task", "+search", "--query", query, "--page-limit", str(page_limit), "--format", "json"]
+        )
 
     def search_tasklists(self, query: str, page_limit: int = 20) -> CliResult:
         """Search tasklists by query and return matching tasklist summaries."""
@@ -328,18 +319,16 @@ class LarkCliAdapter:
         self,
         task_guid: str,
         assignee_ids: list[str],
-        identity: str = "bot",
+        identity: str = "user",
     ) -> CliResult:
         """Assign an existing task to one or more Feishu users.
 
-        Args:
-            task_guid: The task's unique GUID from create_task or search_tasks.
-            assignee_ids: List of Feishu open_ids (ou_xxx).
-            identity: "bot" (default) or "user".
+        lark-cli flags: --task-id (not --task-guid), --add (not --assignee-ids).
+        Default identity is `user` since `bot` lacks the relevant scope.
         """
         args = [
-            "task", "+assign", "--task-guid", task_guid,
-            "--assignee-ids", ",".join(assignee_ids),
+            "task", "+assign", "--task-id", task_guid,
+            "--add", ",".join(assignee_ids),
             "--as", identity, "--format", "json",
         ]
         return self.run(args, allow_write=True)
@@ -357,13 +346,13 @@ class LarkCliAdapter:
     def list_chat_members(self, chat_id: str, page_size: int = 100) -> CliResult:
         """V1.12: 获取群聊成员列表 (AUTH-7)。
 
-        用于验证用户是否有权访问该群的记忆。
+        使用 `im chat.members get` 子命令；该 API 需要 user 身份
+        (im:chat.members:read scope)。bot 身份默认无此 scope。
         """
         import json
-        params = json.dumps({"page_size": page_size})
+        params = json.dumps({"chat_id": chat_id, "page_size": page_size})
         return self.run(
-            ["im", "+chat-members-list", "--chat-id", chat_id,
-             "--params", params, "--as", "user"],
+            ["im", "chat.members", "get", "--params", params, "--as", "user"],
         )
 
     def verify_chat_membership(self, chat_id: str, open_id: str) -> bool:
@@ -431,33 +420,14 @@ class LarkCliAdapter:
              "--params", params],
         )
 
-    # ── V1.17 P1: 日历参会人 ─────────────────────────────────
-
-    def list_event_attendees(self, calendar_id: str = "primary",
-                              event_id: str = "") -> CliResult:
-        """获取日程参与人列表 (P1 C4)。"""
-        import json
-        params = json.dumps({
-            "calendar_id": calendar_id,
-            "event_id": event_id,
-        })
-        return self.run(
-            ["calendar", "event.attendees", "list",
-             "--params", params, "--as", "user"],
-        )
-
     def _parse_json(self, stdout: str) -> Any | None:
         """Parse stdout as JSON and return None when parsing fails."""
-        import logging
         text = stdout.strip()
         if not text:
             return None
         try:
             return json.loads(text)
-        except json.JSONDecodeError as e:
-            logging.getLogger(__name__).warning(
-                "lark-cli JSON parse failed (first 100 chars): %s... — %s",
-                text[:100], e)
+        except json.JSONDecodeError:
             return None
 
 

@@ -148,12 +148,15 @@ def _format_items_for_prompt(items: list[MemoryItem]) -> str:
 
 
 AGENT_PROMPT_TEMPLATE = """你是一个企业团队的 AI 协作助手 (agent_id={agent_id})。
-你的任务：根据当前项目的结构化记忆 (memory) + 系统识别的协作模式 (patterns) + 触发问题，给出**基于证据**的风险评估和行动建议。
+你的任务：根据当前项目的结构化记忆 (memory) + Agent Context Pack + 系统识别的协作模式 (patterns) + 触发问题，给出**基于证据**的风险评估和行动建议。
 
-# 当前项目结构化记忆
+# 当前项目结构化记忆 (按类型分组人类可读)
 项目: {project_id}
-共 {item_count} 条记忆，按类型分组如下：
+共 {item_count} 条记忆：
 {memory_dump}
+
+# Agent Context Pack (机器可读，含 supersedes 与 raw_snippets)
+{agent_context_pack}
 
 # 系统识别的协作模式 (Pattern Memory)
 {pattern_dump}
@@ -239,11 +242,24 @@ def build_agent_prompt(
     agent_id: str,
 ) -> str:
     pattern_dump, _ = _format_patterns_for_prompt(items, project_id)
+    # V1.18: 注入结构化 Agent Context Pack（机器可读）
+    try:
+        from memory.project_state import build_agent_context_pack
+        ctx_pack = build_agent_context_pack(project_id, items, max_items_per_section=5)
+        # 裁剪 raw_snippets 防止超长
+        for d in ctx_pack.get("decisions", []):
+            d["raw_snippets"] = d.get("raw_snippets", [])[:2]
+        ctx_pack_str = json.dumps(ctx_pack, ensure_ascii=False, indent=2)
+        if len(ctx_pack_str) > 3000:
+            ctx_pack_str = ctx_pack_str[:3000] + "\n  ... (truncated for prompt budget)"
+    except Exception as e:
+        ctx_pack_str = f'{{"_error": "{e}"}}'
     return AGENT_PROMPT_TEMPLATE.format(
         agent_id=agent_id,
         project_id=project_id,
         item_count=len(items),
         memory_dump=_format_items_for_prompt(items),
+        agent_context_pack=ctx_pack_str,
         pattern_dump=pattern_dump,
         trigger_sender=trigger_sender,
         trigger_text=trigger_text,

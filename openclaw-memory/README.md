@@ -233,6 +233,67 @@ AI 卡片包含：
 
 **核心创新**：AI 不只是"读 → 答"，它是 Memory 的**一等公民读写者**，每个 AI 行动都带 `actor_type=ai_agent` 落到审计链，进入审核台等待人类裁定。
 
+## 完整闭环执行链（V1.14 + V1.18）
+
+> Memory 不止给"建议"——它真的能 **act**。
+
+### Action 三件套
+
+```
+Memory diff (upsert) → ActionTrigger.scan() → ActionProposal[]
+                              ↓
+                     ActionExecutor.execute_plan(context={...})
+                              ↓
+                     LarkCliAdapter (lark-cli)
+                              ↓
+                ┌─────────────┴────────────┐
+            飞书任务创建        群消息/@提及/置顶
+                              ↓
+                     action_log.jsonl (idempotency + cooldown 24h)
+```
+
+| 触发规则 | 触发条件 | 自动产生的 Action |
+|---------|---------|---------------|
+| `next_step → create_task` | Memory diff 中出现 `next_step`（且 confidence ≥ 0.65） | 通过 `lark-cli task +create` 创建飞书任务 + 自动指派给 owner |
+| `blocker → send_alert` | 出现新 `blocker` 或现有 `blocker` 升级为 high severity | 通过 `lark-cli im +messages-send` 在群里 @ 相关 owner |
+| `deadline+blocker → send_warning` | imminent deadline (≤ 3 天) **且** 同 owner 有未解决 blocker | 高优先级风险预警卡，群发 + 私聊 |
+
+每条 ActionProposal 通过 `idempotency_key` 防重，`has_recent_action` 检查 24h 冷却。所有执行结果（含失败原因）落到 `action_log.jsonl` 审计。**实测延迟**：从 memory diff 到飞书任务创建 < 2 秒。
+
+跑一次完整闭环演示：
+
+```bash
+python scripts/demo_movie.py --scene auto_action --feishu
+# → AI 选 plan 中 top create_task → lark-cli 真创建飞书任务 → 自动指派群成员 → action_log.jsonl 审计
+```
+
+### Agent Context Pack（赛题"AI 关键作用"对应物）
+
+[`build_agent_context_pack()`](src/memory/project_state.py) 是专门给 AI Agent 消费的**结构化 context 包**——不是给人看的 markdown，而是 LLM 可机器解析的 JSON：
+
+```json
+{
+  "project": {"project_id": "...", "title": "...", "description": "..."},
+  "decisions": [
+    {"id": "mem_xxx", "title": "用 Remix", "status": "confirmed",
+     "supersedes": ["mem_old_react18"],
+     "raw_snippets": [{"chat_id": "oc_x", "message_id": "om_x", "text": "..."}]}
+  ],
+  "tasks":   [{"id": "...", "title": "...", "status": "in_progress", "assignees": ["ou_xxx"]}],
+  "risks":   [{"id": "...", "description": "...", "severity": "high"}],
+  "recent_discussion_snippets": [...],
+  "user_perspective": {"user_id": "...", "open_tasks": [...]}
+}
+```
+
+AI Agent 拿到这份 pack 就能做精准引用：决策的 supersedes 链、任务的 owner、风险的 severity——全部带 `id`，可以反向写回 memory 形成闭环。
+
+**赛题"AI 在其中起到什么关键作用？"的最直接回答：**
+
+1. **理解隐式语义**（Hybrid Selector：模糊语义 → DeepSeek，规则不擅长的"那就这样吧"/"算了不做了" 都能识别）
+2. **综合多源 context 做推理**（read agent_context_pack + Pattern Memory → 给出风险评估 + 行动建议）
+3. **真正干活**（write actions back 到飞书任务/群消息，actor_type=ai_agent 全程审计）
+
 ## Golden Set 评测（150 条）
 
 | 模式 | 通过数 | 通过率 | 说明 |

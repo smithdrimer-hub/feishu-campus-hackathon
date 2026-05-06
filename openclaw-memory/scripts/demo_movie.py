@@ -177,6 +177,9 @@ def _seed_demo_metadata(items: list[MemoryItem], store: MemoryStore) -> list[Mem
             it.metadata = md
         if it.state_type == "deadline" and not it.owner:
             it.owner = "前端-吴凡"
+        # Bi-temporal seed: 用原始消息时间设置 valid_from
+        if not it.valid_from and it.source_refs:
+            it.valid_from = it.source_refs[0].created_at
     return items
 
 
@@ -764,9 +767,213 @@ def scene_review(items, store, args) -> None:
         beat(f"卡片 JSON: {len(json.dumps(card, ensure_ascii=False))} 字节")
 
 
+def _resolve_assignee_open_id(chat_id: str, prefer_name: str) -> tuple[str, str]:
+    """Look up assignee open_id from chat members. Uses --as user (bot 缺权限)."""
+    try:
+        result = lark_run([
+            "im", "chat.members", "get",
+            "--params", json.dumps({"chat_id": chat_id, "page_size": 50}),
+            "--as", "user",
+        ])
+    except Exception as e:
+        print(f"  ⚠️ list members failed: {e}")
+        return "", ""
+    items = ((result.get("data") or {}).get("items") or [])
+    # 1) 名字精确包含
+    for m in items:
+        name = m.get("name", "") or ""
+        if prefer_name and prefer_name in name:
+            oid = m.get("member_id") or ""
+            if oid.startswith("ou_"):
+                return oid, name
+    # 2) 第一个非 bot 用户
+    for m in items:
+        oid = m.get("member_id") or ""
+        if oid.startswith("ou_"):
+            return oid, m.get("name", "")
+    return "", ""
+
+
+def scene_auto_action(items, store, args) -> None:
+    """SCENE 4 — AI 不止给建议: 真创建飞书任务 + 自动指派 + 审计落盘."""
+    from memory.action_planner import generate_action_plan
+    from memory.action_executor import ActionExecutor
+    from memory.action_log import write_action_log, has_recent_action
+    from adapters.lark_cli_adapter import LarkCliAdapter
+
+    slate("4", "AI 自动执行 (Action Executor)",
+          "11:30 · 系统后台", "AI 决定 → lark-cli 真创建任务 → 自动指派 → 审计")
+
+    plan = generate_action_plan(args.project_id, items)
+    create_actions = [a for a in plan if a.action_type == "create_task"]
+    beat(f"action_plan size={len(plan)} (其中 create_task={len(create_actions)})")
+    if not create_actions:
+        beat("(plan 中没有 create_task，跳过执行)")
+        return
+
+    top = create_actions[0]
+    log_path = ROOT / "data" / "demo_movie" / "action_log.jsonl"
+    # 演示模式：每次重新跑用新 key，避免命中之前的冷却
+    idempotency = f"demo_movie:{int(time.time())}:{top.title[:40]}"
+    pretty_title = top.title.replace("拟创建任务：", "").replace("拟创建任务:", "").strip()
+
+    task_guid = ""
+    elapsed = 0.0
+    assignee_id = ""
+    assignee_name = ""
+    success = False
+
+    if args.feishu:
+        if has_recent_action(log_path, idempotency, cooldown_seconds=300):
+            beat("(命中 5 分钟冷却，跳过执行)")
+            success = False  # but NOT shown as failure
+            cooldown_skip = True
+        else:
+            cooldown_skip = False
+            adapter = LarkCliAdapter()
+            executor = ActionExecutor(adapter, auto_confirm=True)
+            t0 = time.time()
+            result = executor.execute(top, context={
+                "chat_id": args.chat_id,
+                "project_id": args.project_id,
+                "data_dir": str(ROOT / "data" / "demo_movie"),
+                "task_description": (
+                    f"📌 由 OpenClaw Memory Engine 自动创建。\n\n"
+                    f"触发依据：{top.reason}\n"
+                    f"项目：{args.project_id}\n"
+                ),
+            })
+            elapsed = time.time() - t0
+            success = result.success
+            task_guid = (result.output_data or {}).get("task_guid", "")
+
+            # 自动指派给真人 → 进飞书任务通知
+            if success and task_guid:
+                assignee_id, assignee_name = _resolve_assignee_open_id(
+                    args.chat_id, prefer_name=args.assignee_name)
+                if assignee_id:
+                    assign_res = adapter.assign_task(task_guid, [assignee_id])
+                    if assign_res.returncode == 0:
+                        beat(f"✅ assigned to {assignee_name} ({assignee_id[:14]}…)")
+                    else:
+                        beat(f"⚠️ assign failed: {assign_res.stderr[:80]}")
+                else:
+                    beat("⚠️ 没找到可指派的群成员 open_id（任务已创建但未指派）")
+
+            beat(f"executor: success={success} · {elapsed:.1f}s · "
+                 f"task_guid={task_guid[:18]}")
+
+            write_action_log(
+                log_path=log_path, project_id=args.project_id,
+                action_type=top.action_type, proposal_title=top.title,
+                idempotency_key=idempotency, success=success,
+                output_data={**(result.output_data or {}), "assignee": assignee_id},
+                error=result.error,
+            )
+    else:
+        cooldown_skip = False
+
+    # ── 渲染"任务样"卡片 ──────────────────────────────
+    elements: list[dict] = []
+
+    # 状态条 (顶部一行)
+    if success:
+        status_line = "🟢 **任务已自动创建并指派**"
+    elif cooldown_skip:
+        status_line = "🟡 **冷却跳过**（同 idempotency_key 5 分钟内已执行）"
+    else:
+        status_line = "⚪ **预览模式**（未真发）"
+    elements.append({"tag": "div", "text": {"tag": "lark_md", "content": status_line}})
+
+    # 任务主体 — 大标题
+    elements.append({
+        "tag": "div",
+        "text": {"tag": "lark_md",
+                 "content": f"### 📋 {pretty_title}"}
+    })
+
+    # 任务字段（两列布局：assignee + due）
+    fields_left = []
+    fields_left.append({"is_short": True,
+                        "text": {"tag": "lark_md",
+                                 "content": (f"**👤 负责人**\n@{assignee_name or '（未指派）'}"
+                                             if assignee_name
+                                             else "**👤 负责人**\n（待指派）")}})
+    fields_left.append({"is_short": True,
+                        "text": {"tag": "lark_md",
+                                 "content": "**⏰ 截止**\n周五前（自项目 deadline）"}})
+    fields_left.append({"is_short": True,
+                        "text": {"tag": "lark_md",
+                                 "content": "**🏷️ 类型**\n`create_task`（自动）"}})
+    fields_left.append({"is_short": True,
+                        "text": {"tag": "lark_md",
+                                 "content": (f"**🆔 task_guid**\n`{task_guid[:18]}…`"
+                                             if task_guid else "**🆔 task_guid**\n（未生成）")}})
+    elements.append({"tag": "div", "fields": fields_left})
+
+    elements.append({"tag": "hr"})
+
+    # 触发理由 + 完整闭环证据
+    elements.append({"tag": "div",
+                     "text": {"tag": "lark_md",
+                              "content": (f"**🤖 触发理由**\n{top.reason}")}})
+
+    elements.append({"tag": "div",
+                     "text": {"tag": "lark_md",
+                              "content": (
+                                  "**🔒 完整闭环（Memory 不止建议·它真的能 act）**\n"
+                                  "`Memory → ActionPlanner → ActionExecutor → lark-cli → "
+                                  "飞书任务 → assign_task → action_log.jsonl`")}})
+
+    # 操作按钮
+    if task_guid:
+        elements.append({
+            "tag": "action",
+            "actions": [
+                {"tag": "button",
+                 "text": {"tag": "plain_text", "content": "📂 在飞书任务里查看"},
+                 "type": "primary",
+                 "url": "https://applink.feishu.cn/client/todo/detail?guid=" + task_guid},
+                {"tag": "button",
+                 "text": {"tag": "plain_text", "content": "✏️ 改派给他人"},
+                 "type": "default"},
+                {"tag": "button",
+                 "text": {"tag": "plain_text", "content": "🚫 撤销"},
+                 "type": "danger"},
+            ]
+        })
+
+    elements.append({
+        "tag": "note",
+        "elements": [{"tag": "lark_md",
+            "content": (f"📝 已写入 action_log.jsonl 审计 · "
+                        f"idempotency_key=`{idempotency[:24]}…` · "
+                        f"5 分钟冷却防重 · 24h 不重复执行")}],
+    })
+
+    card = {
+        "config": {"wide_screen_mode": True},
+        "header": {
+            "title": {"tag": "plain_text",
+                      "content": "📋 自动创建任务 · 已指派"},
+            "subtitle": {"tag": "plain_text",
+                         "content": "from Memory · via lark-cli · audited"},
+            "template": "green" if success else ("orange" if cooldown_skip else "grey"),
+        },
+        "elements": elements,
+    }
+
+    if args.feishu:
+        msg_id = send_card(card, args.chat_id, "auto_action")
+        beat(f"飞书卡片已发：{msg_id}")
+    else:
+        beat(f"卡片 JSON: {len(json.dumps(card, ensure_ascii=False))} 字节")
+
+
 SCENE_REGISTRY = {
     "morning": scene_morning,
     "orchestrator": scene_orchestrator,
+    "auto_action": scene_auto_action,
     "hotspot": scene_hotspot,
     "standup": scene_standup,
     "handoff": scene_handoff,
@@ -784,6 +991,8 @@ def main() -> None:
     parser.add_argument("--feishu", action="store_true", help="Also send to Feishu")
     parser.add_argument("--chat-id", default=DEFAULT_CHAT_ID)
     parser.add_argument("--project-id", default=DEFAULT_PROJECT)
+    parser.add_argument("--assignee-name", default="徐悦",
+                        help="auto_action 场景: 任务自动指派的群成员名字")
     args = parser.parse_args()
 
     print("\n" + "═" * 78)
