@@ -19,6 +19,44 @@ from typing import Any, Iterable
 from memory.schema import MemoryItem
 
 
+def _normalize_name(name: str) -> str:
+    """统一人名格式：'前端-吴凡' / '吴凡' / '吴凡(产品)' → '吴凡'。
+
+    去掉常见职能前缀（前端-/后端-/测试-/产品-/设计-），
+    再去掉括号备注 (产品)/（产品）。
+    """
+    if not name:
+        return ""
+    n = name.strip()
+    for prefix in ("前端-", "后端-", "测试-", "产品-", "设计-",
+                   "前端 ", "后端 ", "测试 ", "产品 ", "设计 ",
+                   "PM-", "QA-", "UI-", "UX-"):
+        if n.startswith(prefix):
+            n = n[len(prefix):]
+            break
+    for sep in ("(", "（"):
+        if sep in n:
+            n = n.split(sep, 1)[0]
+    return n.strip()
+
+
+def _normalize_name(name: str) -> str:
+    """统一人名：'前端-吴凡' / '吴凡' / '吴凡(产品)' → '吴凡'。"""
+    if not name:
+        return ""
+    n = name.strip()
+    for prefix in ("前端-", "后端-", "测试-", "产品-", "设计-",
+                   "前端 ", "后端 ", "测试 ", "产品 ", "设计 ",
+                   "PM-", "QA-", "UI-", "UX-"):
+        if n.startswith(prefix):
+            n = n[len(prefix):]
+            break
+    for sep in ("(", "（"):
+        if sep in n:
+            n = n.split(sep, 1)[0]
+    return n.strip()
+
+
 @dataclass
 class UnblockAction:
     """一个解除阻塞的行动建议。"""
@@ -61,27 +99,34 @@ def build_dependency_graph(items: list[MemoryItem]) -> dict[str, Any]:
         if who:
             blocked_people.setdefault(who, []).append(b)
 
-    # Who can unblock (heuristic: look for names in blocker text)
-    all_names = set()
+    # Who can unblock — only use the canonical owner field, not the value blob
+    # (avoids garbage like "测试-张蕾在写测试用例")
+    all_names: set[str] = set()
     for o in owners:
         if o.owner:
             all_names.add(o.owner)
-        if o.current_value:
-            all_names.add(o.current_value.split("负责")[0].strip() if "负责" in o.current_value else o.current_value)
     for ns in next_steps:
         if ns.owner:
             all_names.add(ns.owner)
+    for b in blockers:
+        if b.owner:
+            all_names.add(b.owner)
 
     # Build edges: blocker -> who might resolve it
+    # Priority: metadata.dependency_owner (explicit) > name in blocker text (heuristic)
     edges: list[dict[str, Any]] = []
     for b in blockers:
         blocked_by = b.owner or "?"
         resolver = None
-        text = b.current_value.lower()
-        for name in all_names:
-            if name and name in b.current_value and name != blocked_by:
-                resolver = name
-                break
+        meta = getattr(b, "metadata", None) or {}
+        explicit_dep = meta.get("dependency_owner")
+        if explicit_dep:
+            resolver = str(explicit_dep)
+        else:
+            for name in all_names:
+                if name and name in b.current_value and name != blocked_by:
+                    resolver = name
+                    break
         edges.append({
             "blocker_id": b.memory_id,
             "blocker_text": b.current_value[:80],
@@ -120,18 +165,32 @@ def orchestrate(project_id: str, items: Iterable[MemoryItem]) -> OrchestratedPla
     items_list = [i for i in items if i.project_id == project_id]
     graph = build_dependency_graph(items_list)
 
+    # Expand unavailable set with normalized variants so resolver lookups
+    # can catch "前端-小杨" when only "小杨" is in unavailable.
+    unavailable_norms = {_normalize_name(n) for n in graph["unavailable"]}
+    expanded_unavailable = set(graph["unavailable"])
+    for n in graph["all_names"]:
+        if _normalize_name(n) in unavailable_norms:
+            expanded_unavailable.add(n)
+    graph["unavailable"] = expanded_unavailable
+
     actions: list[UnblockAction] = []
-    priority = 1
 
-    # Sort edges by downstream impact (descending)
-    sorted_edges = sorted(graph["edges"], key=lambda e: e["downstream_count"], reverse=True)
+    # Sort edges by (has_resolver desc, downstream_count desc) — items with a
+    # clear resolver are more actionable, so they bubble to the top.
+    sorted_edges = sorted(
+        graph["edges"],
+        key=lambda e: (1 if e.get("potential_resolver") else 0,
+                       e.get("downstream_count", 0)),
+        reverse=True,
+    )
 
-    for edge in sorted_edges:
+    for idx, edge in enumerate(sorted_edges):
+        priority = idx + 1
         resolver = edge["potential_resolver"]
         blocked = edge["blocked_person"]
 
         if resolver and resolver in graph["unavailable"]:
-            # Resolver is unavailable, suggest reassignment
             available_people = graph["all_names"] - graph["unavailable"] - {blocked}
             alt = next(iter(available_people), None)
             actions.append(UnblockAction(
@@ -148,45 +207,62 @@ def orchestrate(project_id: str, items: Iterable[MemoryItem]) -> OrchestratedPla
                 assignee=resolver,
                 action=f"解除阻塞：{edge['blocker_text'][:50]}",
                 unblocks=[blocked] + [f"+{edge['downstream_count']}个下游任务"],
-                reason=f"解决后可解锁{blocked}的{edge['downstream_count']}个下游任务",
+                reason=f"解决后可解锁 {blocked} 的 {edge['downstream_count']} 个下游任务",
                 evidence_msg=edge["blocker_text"],
             ))
         else:
             actions.append(UnblockAction(
-                priority=priority + 1,
+                priority=priority,
                 assignee=blocked,
-                action=f"自行推动解决：{edge['blocker_text'][:50]}",
+                action=f"自行推动：{edge['blocker_text'][:50]}",
                 unblocks=[f"{edge['downstream_count']}个下游任务"],
-                reason="无明确resolver，需自行推动或寻求帮助",
+                reason="无明确依赖方，需自行推动或寻求帮助",
                 evidence_msg=edge["blocker_text"],
             ))
-        priority += 1
 
-    # Add non-blocked next_steps as lower priority
+    # Add non-blocked next_steps with continuing priorities
     blocked_names = set(graph["blocked_people"].keys())
+    next_priority = len(actions) + 1
     for ns in graph["next_steps"]:
         if ns.owner and ns.owner not in blocked_names and ns.owner not in graph["unavailable"]:
             actions.append(UnblockAction(
-                priority=priority,
+                priority=next_priority,
                 assignee=ns.owner,
                 action=f"继续推进：{ns.current_value[:50]}",
                 unblocks=[],
                 reason="无阻塞，正常推进",
                 evidence_msg=ns.current_value,
             ))
-            priority += 1
+            next_priority += 1
 
-    # Team status summary
-    team_summary = {}
+    # Team status summary — dedup by normalized name
+    raw_summary: dict[str, str] = {}
     for name in graph["all_names"]:
         if not name:
             continue
         if name in graph["unavailable"]:
-            team_summary[name] = "不可用（请假/出差）"
+            raw_summary[name] = "不可用（请假/出差）"
         elif name in blocked_names:
-            team_summary[name] = f"被阻塞（{len(graph['blocked_people'][name])}个）"
+            raw_summary[name] = f"被阻塞（{len(graph['blocked_people'][name])}个）"
         else:
-            team_summary[name] = "可正常工作"
+            raw_summary[name] = "可正常工作"
+    # Pick the LONGEST variant for each normalized key (so "前端-吴凡" beats "吴凡")
+    by_canonical: dict[str, tuple[str, str]] = {}
+    rank = {"被阻塞": 0, "不可用": 1, "可正常工作": 2}  # severe states win
+    for raw, status in raw_summary.items():
+        canon = _normalize_name(raw)
+        if not canon:
+            continue
+        prev = by_canonical.get(canon)
+        if prev is None:
+            by_canonical[canon] = (raw, status)
+        else:
+            prev_raw, prev_status = prev
+            prev_rank = next((v for k, v in rank.items() if k in prev_status), 99)
+            cur_rank = next((v for k, v in rank.items() if k in status), 99)
+            if cur_rank < prev_rank or (cur_rank == prev_rank and len(raw) > len(prev_raw)):
+                by_canonical[canon] = (raw, status)
+    team_summary = {raw: status for raw, status in by_canonical.values()}
 
     # Dependency chains for visualization
     chains = []
