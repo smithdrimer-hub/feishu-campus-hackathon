@@ -210,6 +210,28 @@ class LarkCliAdapter:
             allow_write=True,
         )
 
+    def send_card(
+        self,
+        chat_id: str,
+        card: dict | str,
+        identity: str = "bot",
+    ) -> CliResult:
+        """Send a Feishu interactive card.
+
+        Args:
+            chat_id: Target chat ID (oc_xxx).
+            card: Either a card dict (will be json.dumps) or a json-serialized
+                  string. Must conform to Feishu interactive card schema.
+            identity: "bot" (default) or "user".
+        """
+        import json
+        content = card if isinstance(card, str) else json.dumps(card, ensure_ascii=False)
+        return self.run(
+            ["im", "+messages-send", "--as", identity, "--chat-id", chat_id,
+             "--msg-type", "interactive", "--content", content],
+            allow_write=True,
+        )
+
     def reply_message(
         self,
         message_id: str,

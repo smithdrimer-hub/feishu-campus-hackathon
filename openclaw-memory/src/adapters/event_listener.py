@@ -17,6 +17,7 @@ from __future__ import annotations
 import atexit
 import json
 import logging
+import os
 import signal
 import subprocess
 import threading
@@ -25,6 +26,22 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_lark_cli_binary() -> str:
+    """Pick the right lark-cli binary for this OS.
+
+    Priority:
+      1. $LARK_CLI_BIN env var (explicit override)
+      2. lark-cli  (POSIX path, expected on Linux/macOS)
+      3. lark-cli.cmd (legacy Windows fallback)
+    """
+    explicit = os.environ.get("LARK_CLI_BIN")
+    if explicit:
+        return explicit
+    if os.name == "nt":
+        return "lark-cli.cmd"
+    return "lark-cli"
 
 
 class EventStreamListener:
@@ -89,7 +106,7 @@ class EventStreamListener:
     def _start_subprocess(self) -> None:
         """Launch lark-cli event +subscribe."""
         args = [
-            "lark-cli.cmd", "event", "+subscribe",
+            _resolve_lark_cli_binary(), "event", "+subscribe",
             "--as", "bot",
             "--compact",
             "--event-types", self.event_types,

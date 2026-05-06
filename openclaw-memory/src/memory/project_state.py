@@ -816,3 +816,197 @@ def render_confirmation_checklist(
     lines.append("请回复确认或修改：确认全部回复\"确认\"，修改某项回复\"修改 N. 改为XXX\"")
 
     return "\n".join(lines).strip() + "\n"
+
+
+# ── Personal Morning Briefing ─────────────────────────────────
+
+def build_morning_briefing(
+    user_id: str,
+    project_id: str,
+    items: Iterable[MemoryItem],
+    last_seen_at: str | None = None,
+) -> dict[str, Any]:
+    """构建个人每日工作简报：帮助成员快速进入工作状态。
+
+    与 build_personal_work_context 的区别：
+    - personal_work_context = "你有什么任务"（静态清单）
+    - morning_briefing = "今天你需要关注什么"（动态简报+行动建议）
+
+    信息维度：
+    1. 你不在期间发生的变化（新决策/新阻塞/阻塞解除）
+    2. 等你处理的事（别人被你阻塞、分配给你的任务）
+    3. 时间压力（即将到期的deadline）
+    4. 队友状态（谁请假/出差，影响协作）
+    5. 下一步行动建议（基于以上信息自动编排优先级）
+    """
+    from datetime import datetime, timezone
+
+    items_list = list(items)
+    now = datetime.now(timezone.utc)
+
+    if last_seen_at:
+        try:
+            last_seen = datetime.fromisoformat(last_seen_at.replace("Z", "+00:00"))
+        except (ValueError, TypeError):
+            last_seen = None
+    else:
+        last_seen = None
+
+    by_type: dict[str, list[MemoryItem]] = defaultdict(list)
+    for item in items_list:
+        if item.project_id == project_id:
+            by_type[item.state_type].append(item)
+
+    def _is_mine(item: MemoryItem) -> bool:
+        if not item.owner:
+            return False
+        return user_id in item.owner
+
+    def _is_recent(item: MemoryItem) -> bool:
+        if not last_seen or not item.updated_at:
+            return False
+        try:
+            updated = datetime.fromisoformat(item.updated_at.replace("Z", "+00:00"))
+            return updated > last_seen
+        except (ValueError, TypeError):
+            return False
+
+    # 1. Changes since last seen
+    recent_changes = []
+    if last_seen:
+        for item in items_list:
+            if item.project_id == project_id and _is_recent(item):
+                recent_changes.append({
+                    "type": item.state_type,
+                    "value": item.current_value[:100],
+                    "sender": item.source_refs[0].sender_name if item.source_refs else None,
+                })
+
+    # 2. Waiting on you (others blocked by you / tasks assigned to you)
+    waiting_on_me = []
+    for item in by_type.get("next_step", []) + by_type.get("blocker", []):
+        if _is_mine(item):
+            waiting_on_me.append({
+                "type": item.state_type,
+                "value": item.current_value[:100],
+                "urgency": "high" if item.state_type == "blocker" else "normal",
+            })
+
+    # 3. Upcoming deadlines
+    deadlines = []
+    for item in by_type.get("deadline", []):
+        deadlines.append({
+            "value": item.current_value[:100],
+            "source": item.source_refs[0].sender_name if item.source_refs else None,
+        })
+
+    # 4. Team availability
+    team_status = []
+    for item in by_type.get("member_status", []):
+        if not _is_mine(item):
+            team_status.append({
+                "who": item.owner or (item.source_refs[0].sender_name if item.source_refs else "?"),
+                "status": item.current_value[:60],
+            })
+
+    # 5. Suggested actions (auto-prioritized)
+    actions = []
+    for item in waiting_on_me:
+        if item["urgency"] == "high":
+            actions.append({
+                "priority": 1,
+                "action": f"解除阻塞：{item['value'][:60]}",
+                "reason": "有人被你阻塞，优先处理",
+            })
+    for item in waiting_on_me:
+        if item["urgency"] == "normal":
+            actions.append({
+                "priority": 2,
+                "action": f"完成任务：{item['value'][:60]}",
+                "reason": "分配给你的待办",
+            })
+    if deadlines:
+        actions.append({
+            "priority": 1,
+            "action": f"关注截止日：{deadlines[0]['value'][:40]}",
+            "reason": "有临近的deadline",
+        })
+    for change in recent_changes[:3]:
+        if change["type"] == "decision":
+            actions.append({
+                "priority": 3,
+                "action": f"了解新决策：{change['value'][:40]}",
+                "reason": "你不在期间有新决策产生",
+            })
+
+    actions.sort(key=lambda x: x["priority"])
+
+    return {
+        "user_id": user_id,
+        "project_id": project_id,
+        "generated_at": now.isoformat(),
+        "recent_changes": recent_changes[:10],
+        "waiting_on_me": waiting_on_me,
+        "deadlines": deadlines,
+        "team_status": team_status,
+        "suggested_actions": actions[:8],
+    }
+
+
+def render_morning_briefing_text(briefing: dict[str, Any]) -> str:
+    """渲染个人工作简报为飞书可发送的 Markdown 文本。"""
+    lines: list[str] = []
+    user = briefing.get("user_id", "")
+    project = briefing.get("project_id", "")
+
+    lines.append(f"☀️ 早安，{user}！以下是你在 [{project}] 的工作简报：")
+    lines.append("")
+
+    # Recent changes
+    changes = briefing.get("recent_changes", [])
+    if changes:
+        lines.append("📥 你不在期间发生的变化")
+        for c in changes[:5]:
+            sender = f"（{c['sender']}）" if c.get("sender") else ""
+            lines.append(f"- [{c['type']}] {c['value']}{sender}")
+        lines.append("")
+
+    # Waiting on me
+    waiting = briefing.get("waiting_on_me", [])
+    if waiting:
+        lines.append("🔥 需要你处理的")
+        for w in waiting:
+            icon = "🚨" if w["urgency"] == "high" else "📋"
+            lines.append(f"- {icon} {w['value']}")
+        lines.append("")
+
+    # Deadlines
+    deadlines = briefing.get("deadlines", [])
+    if deadlines:
+        lines.append("⏰ 时间提醒")
+        for d in deadlines:
+            lines.append(f"- {d['value']}")
+        lines.append("")
+
+    # Team status
+    team = briefing.get("team_status", [])
+    if team:
+        lines.append("👥 队友状态")
+        for t in team:
+            lines.append(f"- {t['who']}：{t['status']}")
+        lines.append("")
+
+    # Suggested actions
+    actions = briefing.get("suggested_actions", [])
+    if actions:
+        lines.append("▶️ 建议今日行动（按优先级）")
+        for i, a in enumerate(actions, 1):
+            lines.append(f"  {i}. {a['action']}")
+            lines.append(f"     ↳ {a['reason']}")
+        lines.append("")
+
+    if not changes and not waiting and not deadlines and not actions:
+        lines.append("✅ 当前没有需要你特别关注的事项，保持节奏就好！")
+        lines.append("")
+
+    return "\n".join(lines).strip() + "\n"
