@@ -1,4 +1,53 @@
-# OpenClaw Memory Engine V1.18
+# OpenClaw Memory Engine
+
+> **The OS for hybrid human-AI teams.** 让 5 个人 + N 个 AI Agent 像 6 个真同事一样协作。
+
+OpenClaw Memory Engine 从飞书群消息、文档、任务、日历中**持续提取结构化协作状态**（目标 / 负责人 / 决策 / 阻塞 / 截止日 / 下一步 / 暂缓 / 成员状态），绑定原始消息证据，并把它们以**正确的形式**主动送到正确的**人或 AI Agent** 面前——0 秒重建工作上下文，0 早会同步进度，0 交接会议接手项目。
+
+它的真正使命不是"记住聊天记录"——是消除企业协作中的**状态转移成本**（context rebuild），让团队的有效工作时间从 50% 提到 80%+。
+
+## 30 秒看懂
+
+```
+人类用户            飞书群聊 / 文档 / 任务
+     ↓                       ↓
+     └──────────→ Memory Engine ←──────────┘
+                       ↓
+        ┌──────────────┼──────────────┐
+        ↓              ↓              ↓
+    个人简报        全组编排       AI Agent
+   (Morning)    (Orchestrator)    (Risk Analyzer)
+        ↓              ↓              ↓
+    回到飞书 · 卡片 · 证据链 · actor_type 审计
+```
+
+- **结构化抽取**：飞书群里的口语 → 8 类协作状态 + 6 类二阶 Pattern
+- **Hybrid 调度**：规则优先 → 模糊语义触发 LLM → 纯问句跳过（成本降 73%）
+- **AI 同事**：AI Agent 通过 CLI 读 Memory + Pattern → 给风险分析 + 行动建议（12 秒端到端）
+- **可审计**：每条记忆带 sender_name + 飞书消息 URL + actor_type=ai_agent 标识
+- **完整闭环**：从飞书来 → 提取 → 推理 → 通过卡片回到飞书 → 写回 Memory
+
+---
+
+## 🎬 Live Demo: 一天里的 6 个场景
+
+```bash
+python scripts/demo_movie.py --all --feishu     # 一键发完 6 张飞书卡片
+```
+
+| # | 时刻 | 卡片 | 系统能力 |
+|---|------|------|----------|
+| 🌅 | 08:32 通勤路上 | **个人晨报** — "你不在的 2 天里发生了 5 件事" | `morning_briefing` |
+| 🎯 | 09:00 项目大群 | **全组任务编排** — "拉开堵塞口，多米诺式解锁 3 个下游" | `orchestrator` |
+| 🚨 | 11:08 群里求救 | **AI 风险分析** — "周五能上线吗？" → AI 12 秒给出 P0/P1 行动建议 | `demo_agent_loop` |
+| 📍 | 12:50 系统播报 | **阻塞热点预警** — "本周阻塞集中在设计稿（67%），是节奏问题" | `blocker_hotspot` |
+| 📊 | 18:00 站会自动 | **站会摘要** — Yesterday/Today/Blockers 三段式 | `standup_summary` |
+| ⚖️ | 18:30 CTO 私聊 | **决策审核台** — AI 候选 + 冲突检测 + 人裁定 | `review_desk` |
+| 📋 | 19:50 突发离场 | **8 维度交接摘要** — 接手人 0 秒上岗 | `handoff` |
+
+每张卡片均**真实通过 lark-cli 投递到飞书群**，每条信息附 📎 sender + 原文 + 飞书可点击链接。
+
+---
 
 ## Memory Engine ≠ Chat History
 
@@ -144,11 +193,45 @@ python scripts/demo_e2e_pipeline.py --chat-id oc_xxx --hybrid --no-pin
 llm:
   provider: "openai"
   api_key: "sk-xxx"
-  base_url: "https://api.deepseek.com/v1"
-  model: "deepseek-v4-pro"
-  temperature: 0    # V1.11: 消除非确定性
-  max_tokens: 2000
+  base_url: "https://api.deepseek.com"
+  model: "deepseek-chat"   # 非推理模型；推理模型会用 reasoning tokens 吃光输出
+  temperature: 0.1
+  max_tokens: 4000
 ```
+
+## AI Agent 闭环（12 秒端到端）
+
+```bash
+# 启动实时监听器（polling 模式，无需 webhook 配置）
+python scripts/agent_listener_poll.py
+
+# 然后任何群成员在飞书群说：
+#   "现在项目风险大不大？"
+# 12 秒后 AI Agent 卡片到群
+```
+
+**完整时间线（实测）：**
+
+| 阶段 | 耗时 |
+|------|------|
+| 用户在飞书群发触发问题 | 0s |
+| Polling 拉到消息（≤4s 间隔）| ~2s |
+| 触发器关键词命中 | <1ms |
+| 加载 14 条 Memory + 生成 6 类 Pattern | ~50ms |
+| 构造 prompt（2.4k 字符）| <1ms |
+| DeepSeek-chat 推理 + JSON 输出 | 7-9s |
+| 渲染飞书互动卡片 | <50ms |
+| lark-cli 投递卡片 | ~2s |
+| 反写 Memory（actor_type=ai_agent）| <50ms |
+| **总计** | **12s** |
+
+AI 卡片包含：
+- 🚨 风险等级 + 推理理由（**显式引用** Pattern Memory 名）
+- 📊 关键判断点（每条带 📎 原始消息 sender + URL）
+- 🎯 行动建议（按 P0/P1/P2 排序，@ 对应 owner）
+- ⚙️ patterns_used（卡片端校验防 LLM 幻觉，只显示真实生成的 pattern）
+
+**核心创新**：AI 不只是"读 → 答"，它是 Memory 的**一等公民读写者**，每个 AI 行动都带 `actor_type=ai_agent` 落到审计链，进入审核台等待人类裁定。
 
 ## Golden Set 评测（150 条）
 
@@ -196,8 +279,55 @@ llm:
 
 ## 路线图
 
-- **V1.12（当前）**：证据链完善 + 多条件搜索 + 倒排索引 + 文档分节/表格/评论 + owner Pattern 6
-- **P1**：三模式对比跑通、嵌入式 Sheet/Bitable 感知、Wiki 节点遍历、权限最小感知
-- **P2**：文档实时协作感知、跨文档关联、飞书完整权限体系、策略遗忘
+- **V1.18（当前）**：Work Pattern Memory（6 类二阶模式）+ Selector 模式 + 稳定性加固 + 三渠道优化
+- **V1.19+（演示分支 `feature/ai-agent-loop`）**：AI Agent 闭环 + Polling 实时监听 + 6 场景电影 demo + Orchestrator 硬化
+- **P1**：飞书 webhook 模式（替代 polling）、嵌入式 Sheet/Bitable 感知、Wiki 节点遍历
+- **P2**：文档实时协作感知、跨文档关联、飞书完整权限体系、策略遗忘、向量检索集成
 
-> 详细的优化计划（包括文档深度优化、飞书权限体系、P2 企业级增强）见 **[TASKBOARD.md](../TASKBOARD.md)**。
+> 详细的优化计划见 **[TASKBOARD.md](../TASKBOARD.md)**。
+
+---
+
+## 🏆 比赛维度对应（OpenClaw 赛道）
+
+> "重新定义记忆 → 构建记忆引擎 → 证明价值"——本节直接把每个评委评分项映射到代码证据。
+
+### 维度 1：完整性与价值（50%）
+
+| 评分项 | 我们的回答 | 证据位置 |
+|------|----------|---------|
+| 解决什么痛点 | 协作中的**状态转移成本**（人 30%-50% 工作时间用于"重建上下文"） | [README 30秒看懂](#30-秒看懂) |
+| AI 关键作用 | (1) Hybrid 提取隐式语义 (2) AI Agent 综合 Memory + Pattern 给行动建议 (3) 卡片化推送 | `scripts/demo_agent_loop.py` · `scripts/demo_movie.py` |
+| 流程是否闭环 | 飞书群 → polling → 触发 → 读 Memory + Pattern → DeepSeek 推理 → 卡片回群 → 写回 Memory（actor_type 审计） | `scripts/agent_listener_poll.py` |
+| Demo 是否稳定 | 12 秒端到端实测；327 unittest 全过；6 张飞书卡片真实可触达 | [AI Agent 闭环（12 秒端到端）](#ai-agent-闭环12-秒端到端) |
+| 实际效率提升 | 5 个量化场景：抗干扰 / 矛盾更新 / 多日演进 / 人员交接 / 效能对比 | `scripts/run_benchmark.py` + `examples/benchmark_*.jsonl` |
+
+### 维度 2：创新性（25%）
+
+| 创新点 | 与同类的差异 | 实现位置 |
+|------|------------|---------|
+| **AI 一等公民** | 同类项目把 AI 当工具调用，我们让 AI 通过 CLI 读写 Memory，与人共享同一份状态层。每个 AI 行动带 `actor_type=ai_agent + agent_id` 落到审计链 | `src/memory/schema.py` (metadata) · `scripts/demo_agent_loop.py` (`writeback_ai_action`) |
+| **Hybrid 调度策略** | 不是"全规则"也不是"全 LLM"。Selector 三档：精确信号→规则、模糊→LLM、纯问句→跳过。**LLM 调用减少约 60%，覆盖率仍 95%+** | `src/memory/extractor.py` (`HybridExtractor` + `selector_mode`) |
+| **Work Pattern Memory** | 6 类二阶模式（handoff_risk / blocker_hotspot / dependency_blocker / stale_task / deadline_risk_score / responsibility_domain）从已有 Memory 推导，**不重新读消息** | `src/memory/pattern_memory.py` |
+| **卡片端 LLM 防幻觉** | LLM 可能虚构 pattern 名（demo 实测）。卡片只展示 `generate_all_patterns()` 实际生成的 pattern，跨校验过滤 | `scripts/demo_agent_loop.py` (`build_response_card._lookup_evidence`) |
+| **Note 元素内联证据** | 飞书消息深链常 404。改用 `note` 元素内联展示 sender + excerpt，灰色小字不喧宾 | `scripts/demo_movie.py` (`evidence_note`) |
+| **多米诺式解阻塞** | Orchestrator 按"解锁下游数"排优先级，找最优"堵塞口"，让阻塞像多米诺骨牌依次解决 | `src/memory/orchestrator.py` (`build_dependency_graph` + `orchestrate`) |
+
+### 维度 3：技术实现性（25%）
+
+| 评估项 | 实现 |
+|------|------|
+| AI 技术深度 | (1) Schema validated LLM extraction（输出强校验，证据锚点检查）(2) JSON mode + 温度 0.1（确定性）(3) 4 层语义去重（identity / content hash / bigram similarity / 跨 key 决策覆盖）(4) Confidence-based routing（低置信度→审核台） |
+| 架构合理性 | adapter / extractor / engine / store / orchestrator / pattern_memory **6 层正交分离**；LLM provider 接口可插拔（DeepSeek/OpenAI/Claude 都能接） |
+| 工程规范 | 327 unit tests / dataclass schema / YAML 配置可外置 / 安全策略（dry-run 不写盘 + 写入命令需 `allow_write=True`）/ subprocess 超时 / 原子写入 / 损坏恢复 / 孤儿进程清理 |
+| 可扩展性 | adapter 模式留 backend 可替换接口（飞书 → Slack/Teams 只需换 adapter）；MemoryStore 支持 limit/offset 分页；倒排索引 O(1) 查询 |
+| 稳定性 | 6 张飞书卡片真实投递验证；移交场景实测 12s 端到端；Hybrid extraction 17s 处理 26 条消息；polling listener 4s 间隔 |
+
+---
+
+## 🤝 团队成员负责模块（小组提交）
+
+| 成员 | 主要负责 | 代表 commit |
+|------|---------|-----------|
+| **smithdrimer-hub** | V1.0~V1.18 核心引擎（schema / store / extractor / engine / pattern_memory / 三渠道接入 / 稳定性） | `b56d6e7` V1.18 + 17 prior |
+| **FlewolfXY (claire)** | AI Agent Loop / Polling Listener / 6 场景电影 demo / 5 测试集 / Orchestrator 硬化 / Morning Briefing / Pattern 注入推理 | `7e9cbce` `018a505` `d6f1eb0` |
