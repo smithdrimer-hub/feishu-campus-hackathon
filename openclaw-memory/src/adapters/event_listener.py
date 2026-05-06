@@ -14,6 +14,7 @@ Architecture:
 
 from __future__ import annotations
 
+import atexit
 import json
 import logging
 import signal
@@ -53,6 +54,7 @@ class EventStreamListener:
         self.on_event: Callable[[dict], None] | None = None
         # Track whether we're in the middle of a reconnect
         self._reconnecting = False
+        atexit.register(self.stop)
 
     def start(self) -> None:
         """Start the event loop. Blocks until stop() is called."""

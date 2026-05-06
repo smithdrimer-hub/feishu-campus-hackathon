@@ -17,18 +17,33 @@ SECTION_TITLES = {
     "blocker": "当前阻塞与风险",
     "next_step": "建议下一步",
     "member_status": "成员状态与可用性",
+    "pattern": "协作模式与交接风险",
 }
 
 
 def generate_handoff(project_id: str, items: Iterable[MemoryItem]) -> str:
     """Render a Markdown handoff summary for a project."""
     grouped: dict[str, list[MemoryItem]] = defaultdict(list)
-    for item in items:
+    items_list = list(items)
+    for item in items_list:
         if item.project_id == project_id:
             grouped[item.state_type].append(item)
     lines = [f"# 中断续办交接摘要：{project_id}", ""]
     for state_type, title in SECTION_TITLES.items():
         lines.append(f"## {title}")
+        if state_type == "pattern":
+            from memory.pattern_memory import generate_all_patterns
+            patterns = generate_all_patterns(items_list, project_id)
+            if patterns:
+                for p in patterns:
+                    lines.append(f"- **[{p.pattern_type}]** {p.summary}")
+                    lines.append(f"  - 置信度：{p.confidence:.2f}")
+                    srcs = [mid[:20] for mid in p.source_memory_ids[:3]]
+                    lines.append(f"  - 来源记忆：{', '.join(srcs)}...")
+            else:
+                lines.append("- 暂无明确的协作模式。")
+            lines.append("")
+            continue
         state_items = grouped.get(state_type, [])
         if not state_items:
             lines.extend(["- 暂无明确状态。", ""])

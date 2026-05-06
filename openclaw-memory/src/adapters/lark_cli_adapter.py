@@ -53,10 +53,12 @@ class LarkCliAdapter:
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
-                errors="strict",
+                errors="replace",  # V1.18: 使用 replace 避免双重执行
                 check=False,
+                timeout=120,
             )
         except UnicodeDecodeError:
+            # V1.18: 仅捕获 subprocess 启动阶段的编码错误，不双重执行
             completed = subprocess.run(
                 [self.resolve_executable(), *safe_args],
                 input=stdin_text,
@@ -65,6 +67,7 @@ class LarkCliAdapter:
                 encoding="gbk",
                 errors="replace",
                 check=False,
+                timeout=120,
             )
         return CliResult(
             args=safe_args,
@@ -147,11 +150,17 @@ class LarkCliAdapter:
             args.extend(["--offset", str(offset)])
         return self.run(args)
 
-    def search_tasks(self, query: str, page_limit: int = 20) -> CliResult:
-        """Search tasks by query and return matching task summaries."""
-        return self.run(
-            ["task", "+search", "--query", query, "--page-limit", str(page_limit), "--format", "json"]
-        )
+    def search_tasks(self, query: str, page_limit: int = 20,
+                     page_token: str | None = None) -> CliResult:
+        """Search tasks by query and return matching task summaries.
+
+        V1.17 P1: 支持 page_token 分页。
+        """
+        args = ["task", "+search", "--query", query,
+                "--page-limit", str(page_limit), "--format", "json"]
+        if page_token:
+            args.extend(["--page-token", page_token])
+        return self.run(args)
 
     def search_tasklists(self, query: str, page_limit: int = 20) -> CliResult:
         """Search tasklists by query and return matching tasklist summaries."""
@@ -400,14 +409,33 @@ class LarkCliAdapter:
              "--params", params],
         )
 
+    # ── V1.17 P1: 日历参会人 ─────────────────────────────────
+
+    def list_event_attendees(self, calendar_id: str = "primary",
+                              event_id: str = "") -> CliResult:
+        """获取日程参与人列表 (P1 C4)。"""
+        import json
+        params = json.dumps({
+            "calendar_id": calendar_id,
+            "event_id": event_id,
+        })
+        return self.run(
+            ["calendar", "event.attendees", "list",
+             "--params", params, "--as", "user"],
+        )
+
     def _parse_json(self, stdout: str) -> Any | None:
         """Parse stdout as JSON and return None when parsing fails."""
+        import logging
         text = stdout.strip()
         if not text:
             return None
         try:
             return json.loads(text)
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as e:
+            logging.getLogger(__name__).warning(
+                "lark-cli JSON parse failed (first 100 chars): %s... — %s",
+                text[:100], e)
             return None
 
 

@@ -1,84 +1,75 @@
-你这个感觉是对的：**纯关键词搜索确实不靠谱，但“全交给 LLM”也不是成熟方案的终点。**其他比较成熟的 memory / RAG / agent memory 项目，基本都是走“多信号召回 + LLM 抽取/判断 + schema 校验 + 人类审核/可追溯”的路线，不会只靠关键词，也不会无脑全量 LLM。
+这是目前进行的修改。以及暂时不改的地方，请问是否可以做到生成block最多的地方，提示这是最需要补强的地方？这个应该也可以做到，其它还有可以做的吗
 
-几个典型做法可以借鉴。
+可以做到，而且这个比 `collaboration_pair_pattern` 更值得做，甚至可以作为 Work Pattern Memory 的一个新 P0/P1 功能：`blocker_hotspot_pattern`，也就是“阻塞热点识别”。
 
-Mem0 新版不是简单关键词，它强调 **ADD-only extraction、hybrid search、entity linking**：也就是新增记忆时用 LLM 做抽取，但检索时同时结合语义、BM25 关键词和实体匹配，而不是只靠一种信号。它们还强调新算法降低抽取延迟，说明真实系统也在意速度和成本，不是把所有东西都直接扔给 LLM 慢慢判断。([Mem0][1])
+它的价值很直接：不是只告诉你“现在有 blocker”，而是告诉你“哪里最经常被 blocker 卡住”。这很像企业协作记忆引擎该做的事，因为它从单条阻塞升级成了组织协作瓶颈分析。
 
-Letta / MemGPT 系列把记忆分层：长期 archival memory 用语义搜索和标签管理；但它也明确说，频繁变化的当前状态不适合放在 archival memory 里，而应该放在更“当前态”的 memory blocks / scratchpad 里。这个对你们非常重要：你们的项目状态、任务、阻塞、DDL，其实不是普通知识库，而是**高频变化的协作状态**，不能只做向量库搜索。([Letta Docs][2])
+不过表述上建议不要写成“谁 block 最多”，容易变成员工归责；最好写成：
 
-Microsoft GraphRAG 的思路也值得借鉴。标准 GraphRAG 会用 LLM 从文本里抽取实体、关系、claim，再生成图结构和社区摘要；但它也提供 FastGraphRAG，用传统 NLP/规则做一部分实体和关系抽取，减少 LLM reasoning 的成本。这说明成熟方案也不是“关键词 vs LLM”二选一，而是根据任务成本做分层。([GitHub上的Microsoft][3])
+“当前阻塞最多的模块 / 依赖环节 / 任务链路是哪里，建议优先补强。”
 
-所以你们现在最应该从“关键词提取”升级成：
+比如输出：
 
-**多信号候选生成，而不是关键词判断。**
+“近期 blocker 主要集中在设计稿确认，共 4 条，占当前未解决 blocker 的 50%。相关任务包括前端页面、登录页改版、交互验收。建议优先确认设计稿 owner 与交付时间。”
 
-不要让关键词直接决定“这就是记忆”。关键词只负责“这句话可能有用”。然后再结合：
+或者：
 
-语义 embedding 相似度：这句话和“任务分配/阻塞/决策/DDL”的典型表达是否接近。
+“当前阻塞热点：前端联调链路。关联 blocker 包括接口未返回、设计稿未确认、测试环境未准备。该链路同时存在周五 DDL，建议在站会中优先处理。”
 
-实体识别：有没有人名、模块名、文档名、任务名、时间。
+这个完全可以基于你现有能力做，不需要重新扫原始消息。输入就是已有的 blocker MemoryItem，再按这些维度聚合：
 
-上下文窗口：前后 3-5 条消息是不是在讨论同一个事项。
+按模块聚合：前端、后端、设计、测试、部署、文档、审批。
+按依赖方聚合：dependency_owner。
+按任务链路聚合：task / owner / deadline 关联。
+按状态聚合：open、acknowledged、waiting_external。
+按时间聚合：最近 7 天、最近 30 天。
+按严重度聚合：是否临近 DDL、是否多次重复出现、是否仍未解决。
 
-句式强度：是“确定/最终/就这么定了”，还是“考虑/建议/要不要”。
+如果现在 blocker 里已经有 `dependency_owner` 字段，那 `dependency_blocker_pattern` 可以直接扩展。如果没有很成熟的模块字段，也可以先做轻量 keyword domain tagger，例如看到“设计稿/交互稿/Figma”归为设计依赖，看到“接口/API/联调”归为后端接口，看到“测试环境/部署/服务器”归为环境部署。这个足够演示，不必搞复杂 NLP。
 
-来源权重：会议纪要、任务系统、文档标题、群聊闲聊，可信度不一样。
+我建议新增这一类：
 
-历史记忆关系：是否覆盖旧决策、是否和已有 DDL 冲突、是否重复。
+`blocker_hotspot_pattern`
 
-这样系统不再是“看到关键词就提取”，而是“多种信号共同投票”。
+触发条件：同一 time_window 内，某个 domain / dependency_owner / task_chain 出现 2 条以上 open blocker，或者 blocker 数量在当前项目中排名第一。
+输出内容：阻塞最多的地方、关联任务、关联 owner、是否临近 DDL、建议优先补强点。
+默认状态：needs_review。
+接入位置：项目状态面板的“协作模式”节；交接摘要的“协作模式与交接风险”节；站会摘要的“阻塞风险”节。
 
-我会建议你们把架构改成三层：
+其它现在还可以做的，我觉得按价值排序是这样：
 
-第一层是 **candidate generation**：规则、关键词、embedding、实体识别一起找“可能有价值的消息”。这一层可以宽一点，宁可多召回。
+第一，`blocker_hotspot_pattern`。最值得，马上能增强演示效果，也最符合企业管理者视角。🔥
 
-第二层是 **semantic classification**：只对候选消息做 LLM 判断，判断它到底是不是 decision / blocker / next_step / deadline，并输出结构化 JSON。不是全量消息都跑 LLM。
+第二，`stale_task_pattern`，也就是长期无更新任务识别。比如某个 next_step / task 超过 3 天没有新证据、没有 resolved、还有 DDL，就提示“疑似停滞”。这个也很实用，而且和你已有的任务、DDL、blocker 能力很搭。
 
-第三层是 **governance**：高风险、低置信、冲突、覆盖旧记忆的内容进入审核台。低风险高置信内容自动通过。
+第三，`blocker_resolution_candidate`，也就是自动发现“可能已解决的 blocker”。比如群聊或任务里出现“已修复 / 已确认 / 已交付 / 设计稿发了 / 接口好了”，但 blocker 仍是 open，就提示管家审核是否标记 resolved。这个能补你现在“阻塞解决需要手动改”的短板。
 
-你现在最头疼的“关键词不靠谱”，真正解决方案不是“全量 LLM”，而是把关键词降级成候选召回信号之一。
+第四，`deadline_risk_score`，给任务或链路做一个轻量风险等级。不要搞复杂模型，只用规则：临近 DDL + open blocker + owner 请假/无更新 = 高风险；临近 DDL 但无 blocker = 中风险；无 DDL 或已解决 = 低风险。
 
-对你们项目来说，我建议优先这样改：
+第五，`cross_source_inconsistency_pattern` 后面再做。它很有产品价值，但确实需要 source_type、实体归一、同一任务/同一决策判断更成熟。现在可以先保留为 P1，不急。
 
-把 `next_step` 从规则直接提取改成 **候选 + LLM 判定**。因为你们文档里已经承认 next_step 是精度最低的类型，规则精确率只有 0.65，大约三条里一条误判。 这个类型最值得用 LLM，不然自动创建任务风险很高。
+我会把当前路线调整成：
 
-把 `decision` 改成 **规则识别强 confirmed，LLM 判断模糊语义**。比如“确定用 React”规则能处理；“那先这样吧”“算了还是用 X”“不如先本地跑”交给 LLM 判断强度。
+已完成的 3 个 pattern 保留。
+马上加 `blocker_hotspot_pattern`。
+然后补 `stale_task_pattern` 或 `blocker_resolution_candidate`。
+`cross_source_inconsistency` 继续放 P1。
+不要做员工画像、能力判断、自动推荐负责人。
 
-把 `blocker` 改成 **规则识别显式阻塞，LLM 识别隐式阻塞**。比如“阻塞：等待设计稿”规则识别；“这个接口没权限，前端现在动不了”交给 LLM。
+给 CC 看的文档可以补这一段：
 
-把检索从关键词搜索升级成 **hybrid search**：BM25/关键词 + embedding + entity filter。比如搜“数据库优化”，不仅找包含“数据库优化”的句子，也找“SQL 查询慢”“索引没建”“后端查询性能”这类语义相关内容。
+```md
+### 建议新增：blocker_hotspot_pattern
 
-主办方免费 key 可以用，但我建议只用于 `hybrid` 模式，不要做唯一主流程。因为你们自己的说明里写 LLM 约 65 秒 / 50 条消息，如果全量跑，demo 可能还能忍，真实办公和比赛现场就很容易慢、超时、限流。更稳的是：规则先筛到 10%-30% 的候选，再让 LLM 判断。
+在现有 Work Pattern Memory 基础上，建议新增 `blocker_hotspot_pattern`，用于识别当前项目中阻塞最多、最需要补强的模块、依赖环节或任务链路。
 
-可以让 Claude Code 下一步做这个，不要再继续堆关键词：
+该模式不用于评价个人，不输出“谁造成阻塞最多”。它只基于已有 blocker、deadline、owner、task 等 MemoryItem，归纳当前协作中最集中的阻塞来源。例如设计稿确认、接口联调、测试环境、审批流程、文档确认等。
 
-```text
-请规划并实施“多信号候选生成 + LLM 语义判定”的提取升级，不要继续只堆关键词，也不要全量消息都调用 LLM。
+触发条件可以先保持简单：在同一 time_window 内，同一 domain / dependency_owner / task_chain 下出现 2 条及以上未解决 blocker，或该类别 blocker 数量在当前项目中排名第一，即生成候选 PatternMemory。
 
-目标：
-把关键词从“最终判断依据”降级为“候选召回信号”，提升 next_step、decision、blocker 这三类的真实办公可靠性，同时控制 LLM 调用成本和速度。
+输出建议包括：阻塞热点名称、关联 blocker 数量、关联任务或模块、是否临近 DDL、证据来源、建议优先补强点。默认 review_status 为 needs_review，不自动生效。
 
-重点设计：
-1. 增加 candidate generation 层：综合关键词、正则、实体、人名、时间、上下文窗口、历史记忆关系，生成候选项。
-2. 增加 semantic classifier：只对候选项调用 LLM，输出结构化 JSON，字段包括 type、value、confidence、reason、evidence_span、risk_level。
-3. 优先覆盖三类：
-   - next_step：降低“请/需要”导致的误判。
-   - decision：区分 discussion / preference / tentative / confirmed。
-   - blocker：识别“动不了/卡住/没权限/还没好”等隐式阻塞。
-4. 增加 hybrid search：关键词/BM25 + embedding + entity filter，不再只做关键词搜索。
-5. LLM 结果必须经过 schema 校验，不能直接写入正式记忆。
-6. 高风险、低置信、冲突、覆盖旧记忆的结果进入审核台。
-7. 增加缓存：message_id + content_hash 相同则不重复调用 LLM。
-8. 保留 fast / hybrid / deep 三种模式：
-   - fast：规则候选，不调用 LLM。
-   - hybrid：只对候选调用 LLM，默认推荐。
-   - deep：全量 LLM 审计，仅用于离线评测。
-9. 不做无关重构；允许为完成本任务必要调整 extractor、search、config、tests。
-10. 必须补无 API 测试，并提供一个小型 demo，展示关键词误判被 LLM 纠正。
+该模式应接入项目状态面板、交接摘要和站会摘要，作为“当前最需要补强的协作瓶颈”展示。
 ```
 
-一句话判断：**你们不要再往“关键词规则库”里硬塞表达了，应该转成“候选召回 + 语义裁判 + 审核兜底”。**这就是从玩具规则系统走向真实办公产品的关键一步。
-
-[1]: https://docs.mem0.ai/migration/oss-v2-to-v3 "Open Source: Migrating to the New Memory Algorithm - Mem0"
-[2]: https://docs.letta.com/guides/core-concepts/memory/archival-memory/ "Archival memory | Letta Docs"
-[3]: https://microsoft.github.io/graphrag/index/methods/ "Methods - GraphRAG"
+我的判断：你现在这轮改动方向是对的，但“只有 3 种模式”稍微少了一点。补一个 `blocker_hotspot_pattern` 后，产品味会明显更强，因为它直接回答管理者最关心的问题：不是“系统记住了什么”，而是“现在最该处理哪里”。这比单纯多做一种抽取类型更有说服力。

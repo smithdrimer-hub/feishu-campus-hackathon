@@ -517,6 +517,11 @@ class ActionTrigger:
         # Persistent log
         if has_recent_action(self.log_path, idempotency_key, self.cooldown_seconds):
             return True
+        # V1.18: 缓存超过500条时清理旧条目防止内存泄漏
+        if len(self._last_alert) > 500:
+            cutoff = datetime.now() - timedelta(hours=self.cooldown_seconds / 3600 * 2)
+            self._last_alert = {k: v for k, v in self._last_alert.items()
+                                if v > cutoff}
         # Mark as seen
         self._last_alert[idempotency_key] = datetime.now()
         return False

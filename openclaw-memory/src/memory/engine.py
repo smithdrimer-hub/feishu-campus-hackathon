@@ -92,7 +92,8 @@ class MemoryEngine:
         Returns:
             活跃记忆项列表
         """
-        empty_diff = {"created": [], "updated": [], "unchanged": [], "conflicts": []}
+        # V1.18: 每次 pipeline 运行时重置，防止长期运行内存无界增长
+        self.last_diff = {"created": [], "updated": [], "unchanged": [], "conflicts": []}
 
         if debounce:
             should_process, delay_reason = self._should_process_now(project_id)
@@ -117,7 +118,6 @@ class MemoryEngine:
             return self.store.list_items(project_id)
 
         result, diff = self.store.upsert_items(new_items, processed_ids)
-        # V1.15: 累积 diff（合并多次 sync 操作）
         for key in ("created", "updated", "unchanged", "conflicts"):
             self.last_diff[key].extend(diff.get(key, []))
 
@@ -157,13 +157,43 @@ class MemoryEngine:
         inner = doc_data.get("data", doc_data)
         markdown = inner.get("markdown", "")
         title = inner.get("title", "未命名文档")
-        # 飞书 API 返回的 markdown 中换行是转义的 \\n，需转为真实换行
-        markdown = markdown.replace("\\n", "\n")
+        total_length = inner.get("total_length", len(markdown))
+        markdown = markdown.replace("\\\\n", "\n").replace("\\n", "\n")
+        doc_url = f"https://www.feishu.cn/docx/{doc_id}"
         resolved_project = project_id or f"doc_{doc_id}"
 
-        # V1.12: 将文档按章节/表格/列表拆分为多个事件
-        import hashlib
+        # D5: 更新检测——对比上次 hash
+        import hashlib, json as _json
         content_hash = hashlib.sha1(markdown.encode("utf-8")).hexdigest()[:12]
+        hash_path = self.store.data_dir / f"doc_hash_{doc_id}.json"
+        last_hash = ""
+        if hash_path.exists():
+            try:
+                last_hash = _json.loads(hash_path.read_text(encoding="utf-8")).get("hash", "")
+            except Exception:
+                pass
+        if last_hash == content_hash:
+            print(f"sync_doc: '{title}' 未变化，跳过")
+            return []
+        hash_path.write_text(_json.dumps({"hash": content_hash, "title": title},
+                                         ensure_ascii=False), encoding="utf-8")
+
+        # D6: 长文档分页拉取
+        if total_length > len(markdown) and total_length > 1000:
+            print(f"sync_doc: 文档较长 ({total_length} 字符)，尝试分页...")
+            offset = len(markdown)
+            while offset < total_length:
+                r2 = self.adapter.fetch_doc(doc_id, offset=offset)
+                if r2.returncode != 0:
+                    break
+                d2 = r2.data or {}
+                i2 = d2.get("data", d2)
+                more_md = i2.get("markdown", "")
+                if not more_md:
+                    break
+                more_md = more_md.replace("\\\\n", "\n").replace("\\n", "\n")
+                markdown += "\n" + more_md
+                offset += len(more_md)
         chunks = self._chunk_doc_markdown(markdown, title)
 
         doc_events = []
@@ -177,8 +207,10 @@ class MemoryEngine:
                 "content": chunk["text"],
                 "created_at": utc_now_iso(),
                 "source_type": "doc",
+                "source_url": doc_url,
                 "section": chunk["section"],
-                "sender": {"id": "doc_sync", "sender_type": "doc_sync"},
+                "sender": {"id": "doc_sync", "sender_type": "user",
+                           "name": f"文档《{title}》"},
             })
 
         print(f"sync_doc: 已读取文档 '{title}' ({len(markdown)} 字符) → {len(doc_events)} 个事件")
@@ -414,16 +446,30 @@ class MemoryEngine:
         if self.adapter is None:
             raise RuntimeError("sync_tasks requires adapter (LarkCliAdapter) to be set on engine")
 
-        result = self.adapter.search_tasks(query)
-        if result.returncode != 0:
-            print(f"sync_tasks: lark-cli failed: {result.stderr or result.stdout}")
-            return []
+        # V1.17 P1: 分页拉取所有任务
+        all_tasks = []
+        page_token = None
+        pages = 0
+        while pages < 10:  # max 10 pages
+            result = self.adapter.search_tasks(query, page_token=page_token)
+            if result.returncode != 0:
+                break
+            payload = result.data or {}
+            page_tasks = payload.get("data", {}).get("items", []) or []
+            if not page_tasks:
+                break
+            all_tasks.extend(page_tasks)
+            pages += 1
+            has_more = payload.get("data", {}).get("has_more", False)
+            page_token = payload.get("data", {}).get("page_token", "")
+            if not has_more or not page_token:
+                break
 
-        payload = result.data or {}
-        tasks = payload.get("data", {}).get("items", []) or []
-        if not tasks:
+        if not all_tasks:
             print("sync_tasks: 未找到匹配的任务")
             return []
+
+        tasks = all_tasks
 
         task_events = []
         for task in tasks:
@@ -432,17 +478,57 @@ class MemoryEngine:
             description = task.get("description", "")
             task_id = task.get("guid", "")
             created = task.get("created_at", utc_now_iso())
+            assignee = task.get("assignee", task.get("assignee_name", ""))
+            due = task.get("due_at", task.get("due", ""))
 
+            # V1.17 P1: 从描述中解析结构化字段
+            import re as _re
+            if not assignee:
+                m = _re.search(r"负责人[：:]\s*(.{1,20})", description or "")
+                if m: assignee = m.group(1).strip()
+            if not due:
+                m = _re.search(r"DDL[：:]\s*(.{1,30})", description or "")
+                if m: due = m.group(1).strip()
+
+            # 构建提取友好文本
+            text_parts = [f"【任务】{summary}"]
+            if assignee and "负责人" not in (description or ""):
+                text_parts.append(f"负责人：{assignee}")
+            if status:
+                text_parts.append(f"状态：{status}")
+            if due:
+                text_parts.append(due)
+            if description:
+                text_parts.append(description[:500])
+            text = "\n".join(text_parts)
+
+            task_url = task.get("url", "")
             task_events.append({
                 "project_id": project_id,
                 "chat_id": "task_source",
                 "message_id": task_id,
-                "text": f"【任务】{summary} - 状态：{status}\n{description[:500]}",
+                "text": text,
                 "content": description,
                 "created_at": created,
                 "source_type": "task",
-                "sender": {"id": "task_sync", "sender_type": "task_sync"},
+                "source_url": task_url,
+                "sender": {"id": "task_sync", "sender_type": "user",
+                           "name": assignee or "任务负责人"},
             })
+            # V1.17 T2: 有截止日期时额外生成 deadline 事件
+            if due and status not in ("completed", "done"):
+                task_events.append({
+                    "project_id": project_id,
+                    "chat_id": "task_source",
+                    "message_id": f"{task_id}_deadline",
+                    "text": f"【任务截止】{summary}\n截止日期：{due}",
+                    "content": f"DDL：{due}",
+                    "created_at": created,
+                    "source_type": "task",
+                    "source_url": task_url,
+                    "sender": {"id": "task_sync", "sender_type": "user",
+                               "name": assignee or "任务负责人"},
+                })
 
         print(f"sync_tasks: 已拉取 {len(tasks)} 个任务")
         return self.ingest_events(task_events, debounce=False)
@@ -467,19 +553,75 @@ class MemoryEngine:
             return []
         events = []
         for ev in items:
+            # C1: 组织者信息
+            organizer = ev.get("event_organizer", {}) or {}
+            org_name = organizer.get("display_name", "")
+            org_id = organizer.get("user_id", "")
+
             text = f"【日程】{ev.get('summary', '')}"
+            if org_name:
+                text += f"\n负责人：{org_name}"
             desc = ev.get("description", "")
             if desc:
                 text += f"\n{desc[:500]}"
+            cal_link = ev.get("app_link", "")
+
+            # C5: 视频会议信息
+            vchat = ev.get("vchat", {}) or {}
+            if isinstance(vchat, dict) and vchat.get("meeting_url"):
+                text += f"\n视频会议：{vchat.get('meeting_url', '')}"
+
+            # C4: 参会人
+            calendar_id = ev.get("organizer_calendar_id", "primary")
+            event_id = ev.get("event_id", "")
+            attendee_names = []
+            if event_id:
+                try:
+                    att_result = self.adapter.list_event_attendees(
+                        calendar_id, event_id)
+                    if att_result.returncode == 0:
+                        att_data = att_result.data or {}
+                        att_items = (att_data.get("data", {}) or {}).get(
+                            "items", att_data.get("items", [])) or []
+                        for a in att_items:
+                            if isinstance(a, dict):
+                                name = a.get("display_name", a.get("name", ""))
+                                if name and name != org_name:
+                                    attendee_names.append(name)
+                except Exception:
+                    pass
+            if attendee_names:
+                text += f"\n参会人：{', '.join(attendee_names[:10])}"
+
             events.append({
                 "project_id": project_id, "chat_id": "",
                 "message_id": f"cal_{ev.get('event_id', '')}",
                 "text": text, "content": text,
-                "created_at": ev.get("start_time", utc_now_iso()),
+                "created_at": str(ev.get("start_time", utc_now_iso()))[:25],
                 "source_type": "calendar",
-                "sender": {"id": ev.get("organizer_id", ""),
-                           "sender_type": "calendar_sync"},
+                "source_url": cal_link,
+                "sender": {"id": org_id,
+                           "sender_type": "user",
+                           "name": org_name or "日程创建者"},
             })
+
+            # C3: 空闲/忙碌 → member_status
+            free_busy = ev.get("free_busy_status", "")
+            if free_busy == "busy" and org_name:
+                start_raw = ev.get("start_time", "")
+                start_t = start_raw if isinstance(start_raw, str) else (
+                    start_raw.get("datetime", "") if isinstance(start_raw, dict) else str(start_raw))
+                events.append({
+                    "project_id": project_id, "chat_id": "",
+                    "message_id": f"cal_{ev.get('event_id', '')}_status",
+                    "text": f"【成员状态】{org_name} 在 {start_t[:16]} 有日程，状态忙碌",
+                    "content": f"忙碌：{ev.get('summary', '')}",
+                    "created_at": start_t or utc_now_iso(),
+                    "source_type": "calendar",
+                    "source_url": cal_link,
+                    "sender": {"id": org_id, "sender_type": "user",
+                               "name": org_name},
+                })
         print(f"sync_calendar: {len(items)} 日程 → {len(events)} 事件")
         return self.ingest_events(events, debounce=False)
 

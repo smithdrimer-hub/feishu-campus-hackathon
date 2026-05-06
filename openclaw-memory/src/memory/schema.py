@@ -99,7 +99,8 @@ class MemoryItem:
         """Create a MemoryItem from a JSON-compatible dict.
         V1.6: 旧数据缺少 valid_from/valid_to/recorded_at 时兼容加载。
         """
-        refs = [SourceRef.from_dict(ref) for ref in data.get("source_refs", [])]
+        refs = [SourceRef.from_dict(ref) for ref in data.get("source_refs", [])
+                if isinstance(ref, dict)]  # V1.18: 防御损坏数据
         return cls(
             project_id=str(data.get("project_id", "")),
             state_type=str(data.get("state_type", "")),
@@ -134,19 +135,19 @@ def source_ref_from_event(event: dict[str, Any], excerpt: str | None = None) -> 
     message_id = str(event.get("message_id", ""))
     sender = event.get("sender", {}) or {}
 
-    # 构建来源链接（V1.12: 区分消息和文档 URL）
-    source_url = ""
-    source_type = str(event.get("source_type", "message"))
-    if source_type == "doc":
-        # 文档链接：从 message_id 中提取 doc_id（格式: doc_{doc_id}_{hash}）
-        doc_id_raw = str(event.get("message_id", ""))
-        if doc_id_raw.startswith("doc_"):
-            parts = doc_id_raw.split("_", 1)
-            if len(parts) > 1:
-                doc_token = parts[1].rsplit("_", 1)[0]
-                source_url = f"https://www.feishu.cn/docx/{doc_token}"
-    elif chat_id and message_id:
-        source_url = f"https://app.feishu.cn/client/messages/{chat_id}/{message_id}"
+    # 构建来源链接
+    source_url = str(event.get("source_url", ""))  # V1.17: 优先使用 event 中已有的 URL
+    if not source_url:
+        source_type = str(event.get("source_type", "message"))
+        if source_type == "doc":
+            doc_id_raw = str(event.get("message_id", ""))
+            if doc_id_raw.startswith("doc_"):
+                parts = doc_id_raw.split("_", 1)
+                if len(parts) > 1:
+                    doc_token = parts[1].rsplit("_", 1)[0]
+                    source_url = f"https://www.feishu.cn/docx/{doc_token}"
+        elif chat_id and message_id:
+            source_url = f"https://app.feishu.cn/client/messages/{chat_id}/{message_id}"
 
     return SourceRef(
         type=str(event.get("source_type", "message")),

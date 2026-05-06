@@ -411,20 +411,175 @@ class LLMExtractor(BaseExtractor):
 
 
 class RuleBasedExtractor(BaseExtractor):
-    """Extract V1 collaboration state using simple Chinese/English keyword rules."""
+    """Extract V1 collaboration state using simple Chinese/English keyword rules.
+
+    V1.17: selector_mode=True（默认）→ 有把握才提取，没把握交给LLM。
+    selector_mode=False → 传统模式（全部提取，用于 Golden Set 评测）。
+    """
+
+    def __init__(self, selector_mode: bool = False):
+        self.selector_mode = selector_mode
 
     # V1.6: 成员状态关键词
     _MEMBER_STATUS_KEYWORDS = frozenset(["请假", "不在", "休假", "出差", "习惯用", "擅长"])
-    # V1.15: 第一人称代词（不作为owner提取）
+    # V1.15: 第一人称代词（不作为owner提取，改为解析发送者）
     _SELF_REFERENCE = frozenset({"我", "你", "他", "她", "我们", "你们", "他们", "她们", "大家", "自己"})
 
+    # ── V1.17: Rule→Selector 信号体系 ──────────────────────────
+
+    # 强不确定语气词（检测到 → 整条消息交给LLM）
+    _HIGH_UNCERTAINTY = frozenset({"吗", "呢", "吧", "？", "?", "嘛", "喽", "呗"})
+    # 中等不确定（含试探/商量的信号）
+    _MED_UNCERTAINTY = frozenset({"要不", "要不要", "是否", "是不是", "会不会", "能不能", "可不可以"})
+    # 弱不确定（概率性表达）
+    _WEAK_UNCERTAINTY = frozenset({"也许", "可能", "大概", "估计", "好像", "似乎", "应该吧", "不清楚"})
+
+    # 否定词（豁免词已排除）
+    _NEGATION_CHARS = frozenset({"不", "没", "别", "无", "非", "未"})
+    _NEGATION_SAFE = frozenset({"不错", "不管", "没问题", "没关系", "不要紧",
+                                 "不仅如此", "不少", "说不定",
+                                 "不要忘了", "别忘了"})
+
+    # 极简回复（仅白名单，不按长度。短消息如"周五交"不应被误杀）
+    _TRIVIAL = frozenset({"好的", "收到", "行", "OK", "ok", "嗯", "对", "是的",
+                           "好", "可以", "没问题", "知道了", "明白了", "了解了"})
+
+    # 纯问题模式（技术咨询，无协作意图 → 直接跳过）
+    _PURE_QUESTION = ("请问", "谁知道", "有没有人", "有人知道", "怎么配", "怎么调",
+                      "如何配置", "如何使用", "能不能帮", "可以帮", "怎么弄",
+                      "啥意思", "什么意思", "是什么", "在哪里")
+
+    # 口语化弱信号（不精确，但有协作可能 → LLM）
+    _COLLOQUIAL_WEAK = frozenset({"弄一下", "搞一下", "看一下", "整一下", "弄弄", "搞搞",
+                                   "看看", "瞅瞅", "试试", "试一下", "弄完", "搞完"})
+
+    # V1.17: 精确信号（格式固定，规则可直接提取）
+    _PRECISE_SIGNALS = frozenset({
+        "负责人", "负责", "owner",
+        "就这么定了", "最终方案", "敲定", "正式决定",
+        "阻塞了", "卡住了",
+        "下一步", "待办", "TODO",
+        "DDL", "截止日期", "deadline",
+        "暂缓", "先不做", "搁置",
+        "目标是", "goal",
+        "请假", "出差", "休假", "不在公司",
+        "分工",  # 分工：XXX负责YYY — 格式固定
+    })
+
+    # V1.17: 模糊信号（触发词常见但协作语义弱 → delegate LLM）
+    _FUZZY_SIGNALS = frozenset({
+        "决策", "决定", "确定", "采用", "改为", "不再", "换成", "改成", "改用",
+        "考虑", "觉得", "倾向于", "建议", "推荐",
+        "阻塞", "风险", "依赖",
+        "需要", "请",
+        "延期", "改到", "调到",
+        "暂停", "先不",
+        "不在",
+        "由",
+        "在弄", "在做", "在搞", "在写", "还没好", "来不及",
+        "我来", "他来", "她来", "那就", "那先", "先做",
+        "没给", "没出", "没回复", "打算", "要不要",
+        "搞定", "弄完", "搞完", "准备用", "准备做",
+    })
+
+    @staticmethod
+    def _has_precise_signal(text: str) -> bool:
+        return any(w in text for w in RuleBasedExtractor._PRECISE_SIGNALS)
+
+    @staticmethod
+    def _has_fuzzy_signal(text: str) -> bool:
+        return any(w in text for w in RuleBasedExtractor._FUZZY_SIGNALS)
+
+    @staticmethod
+    def _has_uncertainty(text: str) -> bool:
+        """检测强不确定语气 → 整条消息交给LLM。"""
+        return any(w in text for w in RuleBasedExtractor._HIGH_UNCERTAINTY)
+
+    @staticmethod
+    def _has_negation(text: str) -> bool:
+        """检测有效否定（排除豁免词）。"""
+        cleaned = text
+        for safe in RuleBasedExtractor._NEGATION_SAFE:
+            cleaned = cleaned.replace(safe, "")
+        return any(w in cleaned for w in RuleBasedExtractor._NEGATION_CHARS)
+
+    @staticmethod
+    def _is_trivial(text: str) -> bool:
+        """极简回复 → 跳过（仅白名单，不按长度）。"""
+        return text.strip() in RuleBasedExtractor._TRIVIAL
+
+    @staticmethod
+    def _has_any_signal(text: str) -> bool:
+        """检测是否包含任何协作信号（含隐式）。"""
+        _all_keywords = (
+            "负责", "负责人", "owner", "目标", "goal",
+            "决策", "决定", "确定", "采用", "改为", "不再", "换成", "改成", "改用",
+            "考虑", "觉得", "倾向于", "建议", "推荐",  # 模糊决策信号
+            "阻塞", "卡住", "风险", "依赖",
+            "下一步", "待办", "todo", "需要", "请",
+            "DDL", "截止", "deadline", "延期", "改到", "调到",
+            "暂缓", "暂停", "先不", "搁置",
+            "请假", "不在", "休假", "出差",
+            "在弄", "在做", "在搞", "在写", "还没好", "来不及",
+            "分工", "由",  # owner 信号
+            "我来", "他来", "她来", "那就", "那先", "先做",  # 隐式信号
+            "没给", "没出", "没回复", "打算", "要不要",  # 隐式信号续
+            "搞定", "弄完", "搞完", "准备用", "准备做",  # 隐式信号续
+        )
+        lowered = text.lower()
+        return any(kw in lowered for kw in _all_keywords)
+
     def extract(self, events: Iterable[dict]) -> list[MemoryItem]:
-        """Extract candidate memory items from normalized raw message events."""
+        """V1.17: Selector模式——有把握才提取，没把握加入 delegate_list。
+
+        delegate_list 存储在 self._delegate_list 中，供 HybridExtractor 读取。
+        selector_mode=False → 传统模式（全部提取，Golden Set 评测用）。
+        """
         items: list[MemoryItem] = []
+        self._delegate_list: list[dict] = []
+
         for event in events:
             text = self._event_text(event)
             if not text:
                 continue
+
+            has_signal = self._has_any_signal(text)
+
+            # V1.17 selector mode: 决策矩阵（仅 Hybrid 模式生效）
+            if self.selector_mode:
+                if self._is_trivial(text):
+                    continue
+                has_precise = self._has_precise_signal(text)
+                has_fuzzy = self._has_fuzzy_signal(text)
+                has_any = has_precise or has_fuzzy
+                has_uncertain = self._has_uncertainty(text)
+                has_neg = self._has_negation(text)
+
+                # 纯问题 → 跳过
+                if has_uncertain and text.startswith(self._PURE_QUESTION):
+                    continue
+                # 强不确定 + 有信号 → delegate
+                if has_uncertain and has_any:
+                    self._delegate_list.append(event)
+                    continue
+                # 否定 + 有信号 → delegate
+                if has_neg and has_any:
+                    self._delegate_list.append(event)
+                    continue
+                # 仅模糊信号（无精确）→ delegate
+                if has_fuzzy and not has_precise:
+                    self._delegate_list.append(event)
+                    continue
+                # 口语化弱信号 → delegate
+                if any(w in text for w in self._COLLOQUIAL_WEAK) and has_any:
+                    self._delegate_list.append(event)
+                    continue
+                # 无任何信号 → 跳过
+                if not has_any:
+                    continue
+
+            # 提取
+            before_count = len(items)
             items.extend(self._extract_goal(event, text))
             items.extend(self._extract_owner(event, text))
             items.extend(self._extract_decision(event, text))
@@ -433,6 +588,10 @@ class RuleBasedExtractor(BaseExtractor):
             items.extend(self._extract_next_step(event, text))
             items.extend(self._extract_member_status(event, text))
             items.extend(self._extract_deadline(event, text))
+
+            # V1.17: selector模式下，有信号但规则未提取 → delegate
+            if self.selector_mode and len(items) == before_count and has_signal:
+                self._delegate_list.append(event)
         return items
 
     def _event_text(self, event: dict) -> str:
@@ -736,9 +895,11 @@ class RuleBasedExtractor(BaseExtractor):
         sender = event.get("sender", {}) or {}
         if isinstance(sender, dict):
             sender_name = str(sender.get("name", sender.get("id", "")))
+        # V1.18: 清理元数据文本中的控制字符
+        clean_text = text[:200].replace("\x00", "").replace("\r", " ")
         item.metadata = {
             "blocker_status": "open",
-            "blocking_reason": text[:200],
+            "blocking_reason": clean_text,
             "blocked_owner": item.owner or "",
             "dependency_owner": "",
             "acknowledged_by": "",
@@ -968,27 +1129,43 @@ class HybridExtractor(BaseExtractor):
         """
         self.rule = rule_extractor or RuleBasedExtractor()
         self.llm = llm_extractor
+        # V1.17: 有 LLM 时才启用 Selector 模式；无 LLM 时退化为全量提取
+        if self.llm is not None:
+            self.rule.selector_mode = True
 
     def extract(self, events: Iterable[dict]) -> list[MemoryItem]:
-        """Rule-first extraction with optional LLM supplement."""
+        """V1.17: Selector模式——规则提取有把握的，没把握的交给LLM。"""
         event_list = list(events)
         if not event_list:
             return []
 
-        # Step 1: 规则提取
+        # Step 1: 规则提取（delegate_list 存在 self.rule._delegate_list 中）
         rule_items = self.rule.extract(event_list)
+        delegate_list = getattr(self.rule, "_delegate_list", [])
 
-        # Step 2: 判断是否需要 LLM 补充
-        if self.llm is None:
+        # Step 2: delegate_list 中的消息交给 LLM 处理
+        llm_items = []
+        if self.llm is not None and delegate_list:
+            llm_items = self._safe_llm_extract(delegate_list)
+            # LLM 空返回时回退：用规则重新提取 delegate 项
+            if not llm_items and delegate_list:
+                saved_mode = getattr(self.rule, "selector_mode", False)
+                self.rule.selector_mode = False
+                for ev in delegate_list:
+                    rule_items.extend(self.rule.extract([ev]))
+                self.rule.selector_mode = saved_mode
+
+        # V1.17: 保留旧逻辑——规则完全没提取时也调LLM（空消息/无信号场景）
+        if not rule_items and not llm_items and self.llm is not None:
+            llm_items = self._safe_llm_extract(event_list)
+
+        if not rule_items and not llm_items:
+            return []
+
+        if not llm_items:
             return rule_items
 
-        if not self._needs_llm(rule_items, event_list):
-            return rule_items
-
-        # Step 3: LLM 提取（含 schema 校验 + fallback）
-        llm_items = self._safe_llm_extract(event_list)
-
-        # Step 4: 合并规则结果与 LLM 结果（去重）
+        # Step 3: 合并规则结果与 LLM 结果（去重）
         merged = self._merge_results(rule_items, llm_items)
 
         # V1.11: 二次兜底 — LLM 和规则都几乎没提取，但触发了 LLM
@@ -1101,7 +1278,10 @@ class HybridExtractor(BaseExtractor):
         """
         try:
             return self.llm.extract(events)
-        except Exception:
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(
+                "LLM extraction failed, falling back to rules: %s", e)
             return []
 
     def _merge_results(

@@ -95,13 +95,13 @@ class SafetyPolicyTest(unittest.TestCase):
 class TestAdapterEncoding(unittest.TestCase):
     """V1.12 FIX-5 real: 验证 adapter subprocess 编码安全."""
 
-    def test_run_uses_strict_encoding(self):
-        """adapter.run 应优先使用 errors='strict' + UTF-8。"""
+    def test_run_uses_utf8_encoding(self):
+        """V1.18: adapter.run 优先 UTF-8（errors='replace' 避免双重执行写操作）。"""
         from adapters.lark_cli_adapter import LarkCliAdapter
         import inspect
         source = inspect.getsource(LarkCliAdapter.run)
         self.assertIn('encoding="utf-8"', source)
-        self.assertIn('errors="strict"', source)
+        self.assertIn('timeout=120', source)  # V1.18: 超时保护
 
     def test_run_has_gbk_fallback(self):
         """adapter.run 应有 GBK 回退（UnicodeDecodeError → GBK）。"""

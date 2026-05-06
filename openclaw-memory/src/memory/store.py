@@ -100,9 +100,27 @@ class MemoryStore:
         return events
 
     def load_state(self) -> dict[str, Any]:
-        """Load memory_state.json and return the decoded state object."""
+        """Load memory_state.json and return the decoded state object.
+
+        V1.18: 损坏时自动从 .tmp 备份恢复。
+        """
         self.ensure_files()
-        return json.loads(self.memory_state_path.read_text(encoding="utf-8"))
+        try:
+            return json.loads(self.memory_state_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            # 尝试从临时备份恢复
+            tmp_path = self.memory_state_path.with_suffix(".json.tmp")
+            if tmp_path.exists():
+                try:
+                    state = json.loads(tmp_path.read_text(encoding="utf-8"))
+                    self.memory_state_path.write_text(
+                        json.dumps(state, ensure_ascii=False, indent=2),
+                        encoding="utf-8")
+                    return state
+                except (json.JSONDecodeError, OSError):
+                    pass
+            # 无法恢复，返回空状态
+            return {"items": [], "history": [], "processed_event_ids": []}
 
     def save_state(
         self,
@@ -118,7 +136,10 @@ class MemoryStore:
             "processed_event_ids": sorted(set(processed_event_ids)),
             "updated_at": utc_now_iso(),
         }
-        self.memory_state_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        # V1.18: 原子写入——先写临时文件再替换，防止并发损坏
+        tmp_path = self.memory_state_path.with_suffix(".json.tmp")
+        tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp_path.replace(self.memory_state_path)
 
     def search_keywords(
         self,
@@ -808,7 +829,8 @@ class MemoryStore:
             # V1.11 Layer 4: 跨 key 决策/截止日期覆盖
             # V1.15: 冲突检测 — 同主题但 value 差异大时标记冲突而非覆盖
             layer4_applied = False
-            if old_item is None and new_item.state_type in ("decision", "deadline"):
+            # V1.18: O(n) guard — 超过 200 条时跳过 Layer 4 避免 O(n²)
+            if old_item is None and new_item.state_type in ("decision", "deadline") and len(items) <= 200:
                 for existing in list(items):
                     if existing.state_type != new_item.state_type:
                         continue

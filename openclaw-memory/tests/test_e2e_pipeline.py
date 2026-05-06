@@ -77,7 +77,7 @@ class MockAdapter:
             }
         })
 
-    def search_tasks(self, query):
+    def search_tasks(self, query, page_token=None):
         return _mock_result(0, {
             "data": {
                 "has_more": False,

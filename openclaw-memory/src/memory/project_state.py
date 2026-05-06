@@ -170,6 +170,11 @@ def build_group_project_state(
             times.sort(reverse=True)
             last_update = times[0]
 
+    # V1.18: 协作模式记忆
+    from memory.pattern_memory import generate_all_patterns
+    pattern_list = generate_all_patterns(items_list, project_id)
+    pattern_dicts = [p.to_dict() for p in pattern_list]
+
     return {
         "project_id": project_id,
         "project_title": project_title,
@@ -183,6 +188,7 @@ def build_group_project_state(
         "risks": risks,
         "resolved_blockers": resolved_blockers,
         "next_actions": next_actions,
+        "patterns": pattern_dicts,
     }
 
 
@@ -260,6 +266,16 @@ def render_group_state_panel_text(state: dict[str, Any]) -> str:
         for r in resolved[:5]:
             lines.append(f"- {r.get('description', '')}")
         lines.append("")
+
+    # V1.18: 协作模式提示
+    patterns = state.get("patterns", [])
+    lines.append("🔄 协作模式")
+    if patterns:
+        for p in patterns[:3]:
+            lines.append(f"- [{p.get('pattern_type','')}] {p.get('summary','')}")
+    else:
+        lines.append("- 暂无协作模式提示（积累更多协作数据后自动生成）")
+    lines.append("")
 
     # Next actions
     next_acts = state.get("next_actions", [])

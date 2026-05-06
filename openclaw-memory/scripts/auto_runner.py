@@ -39,8 +39,15 @@ def load_config(path: str) -> dict:
         if example.exists():
             logger.warning("%s not found, using %s", path, example)
             p = example
-    with p.open(encoding="utf-8") as f:
-        return yaml.safe_load(f) or {}
+        else:
+            logger.error("No config file found at %s or %s", path, example)
+            return {}
+    try:
+        with p.open(encoding="utf-8") as f:
+            return yaml.safe_load(f) or {}
+    except (yaml.YAMLError, OSError) as e:
+        logger.error("Failed to load config %s: %s", path, e)
+        return {}
 
 
 def run_pipeline(project: dict, dry_run: bool = True) -> None:
@@ -85,8 +92,12 @@ def run_pipeline(project: dict, dry_run: bool = True) -> None:
             },
         })
 
-    store.append_raw_events(events)
-    items = engine.process_new_events(project_id, debounce=False)
+    if not dry_run:
+        store.append_raw_events(events)
+        items = engine.process_new_events(project_id, debounce=False)
+    else:
+        # V1.18: dry_run 时跳过本地写入，仅内存提取
+        items = engine.extractor.extract(events)
     logger.info("[%s] Extracted %d active items", project_id, len(items))
 
     # Generate state panel (preview mode — no auto send)
