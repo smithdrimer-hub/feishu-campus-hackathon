@@ -204,6 +204,13 @@ class LarkCliAdapter:
                  "--markdown", content],
                 allow_write=True,
             )
+        # V1.18: 交互式卡片——1.0.24 subprocess 无长度限制
+        if msg_type == "interactive":
+            return self.run(
+                ["im", "+messages-send", "--as", identity, "--chat-id", chat_id,
+                 "--msg-type", "interactive", "--content", content],
+                allow_write=True,
+            )
         return self.run(
             ["im", "+messages-send", "--as", identity, "--chat-id", chat_id,
              "--text", content],

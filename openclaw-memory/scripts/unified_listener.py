@@ -106,20 +106,30 @@ def _is_duplicate(msg_id: str) -> bool:
     return False
 
 
-def _check_confirmation_reply(text: str, chat_id: str, adapter) -> bool:
-    """V1.18 R4闭环: 检测确认回复 → 解析 → 执行。返回True表示已处理。"""
-    from memory.reply_handler import parse_confirmation, find_question
+def _check_confirmation_reply(text: str, chat_id: str, adapter,
+                              project_id: str = "", data_dir: str = "") -> bool:
+    """V1.18 R4闭环: 检测确认回复 → 标记 approved → 回复群。"""
+    from memory.reply_handler import parse_confirmation
+    from memory.store import MemoryStore
     is_conf, indices = parse_confirmation(text)
     if not is_conf:
         return False
 
-    # 简化版：文本包含"确认"且含数字 → 视为确认回复
-    if indices:
-        msg = f"收到确认: 已标记 {len(indices)} 项为已确认。"
-    else:
-        msg = "收到: 已标记为不需要创建任务。"
-    adapter.send_message(chat_id, msg)
-    logger.info("R4 confirmation reply processed: %s → %s", text[:50], msg)
+    if data_dir:
+        store = MemoryStore(Path(data_dir))
+        pending = [i for i in store.list_items(project_id)
+                   if getattr(i, "review_status", "") == "needs_review"]
+        if indices:
+            for idx in indices:
+                if 1 <= idx <= len(pending):
+                    store.update_item_review(pending[idx - 1].memory_id, "approved")
+            msg = f"已确认 {len(indices)} 项，可通过审核台查看。"
+        else:
+            for item in pending[:5]:
+                store.update_item_review(item.memory_id, "rejected")
+            msg = "已标记为不需要创建任务。"
+        adapter.send_message(chat_id, msg)
+        logger.info("R4 closed: %s → %s", text[:50], msg)
     return True
 
 
@@ -138,7 +148,7 @@ def process_message(text: str, chat_id: str, project_id: str,
         return [], []
 
     # R4 确认回复检测
-    if _check_confirmation_reply(text, chat_id, adapter):
+    if _check_confirmation_reply(text, chat_id, adapter, project_id, data_dir):
         return [], []
 
     from memory.store import MemoryStore

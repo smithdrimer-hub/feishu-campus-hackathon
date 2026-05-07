@@ -110,8 +110,24 @@ def run_pipeline(project: dict, dry_run: bool = True) -> None:
     # Generate morning report
     report = generate_morning_report(project_id, items, store)
 
+    # V1.18: 持久化协作模式
+    from memory.pattern_memory import generate_all_patterns, persist_patterns
+    patterns = generate_all_patterns(items, project_id)
+    if patterns:
+        n = persist_patterns(store, project_id, patterns)
+        if n > 0:
+            logger.info("[%s] Persisted %d new patterns", project_id, n)
+
     if not dry_run:
-        adapter.send_message(chat_id, panel, msg_type="markdown")
+        import json as _json
+        try:
+            from memory.card_renderer import render_handoff_card
+            card = render_handoff_card(items, project_id)
+            adapter.send_message(chat_id, _json.dumps(card, ensure_ascii=False),
+                                 msg_type="interactive")
+        except Exception:
+            logger.warning("[%s] Card failed, fallback to markdown", project_id)
+            adapter.send_message(chat_id, panel, msg_type="markdown")
         adapter.send_message(chat_id, report, msg_type="markdown")
         logger.info("[%s] Panel + morning report sent", project_id)
     else:

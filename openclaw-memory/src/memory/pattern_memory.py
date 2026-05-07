@@ -386,6 +386,38 @@ def generate_all_patterns(
     return patterns
 
 
+def persist_patterns(store, project_id: str, patterns: list[PatternMemoryItem]) -> int:
+    """V1.18: 将协作模式存入 store metadata，避免重复。"""
+    state = store.load_state()
+    existing = state.get("pattern_memories", [])
+    existing_keys = {p.get("pattern_type", "") + p.get("summary", "")[:40]
+                     for p in existing}
+
+    added = 0
+    for p in patterns:
+        key = p.pattern_type + p.summary[:40]
+        if key in existing_keys:
+            continue
+        existing.append(p.to_dict())
+        existing_keys.add(key)
+        added += 1
+
+    if added > 0:
+        state["pattern_memories"] = existing
+        store.save_state(
+            [MemoryItem.from_dict(i) for i in state.get("items", [])],
+            [MemoryItem.from_dict(h) for h in state.get("history", [])],
+            state.get("processed_event_ids", []),
+        )
+    return added
+
+
+def list_persisted_patterns(store, project_id: str = "") -> list[dict]:
+    """V1.18: 读取已持久化的协作模式。"""
+    state = store.load_state()
+    return state.get("pattern_memories", [])
+
+
 # ── helpers ────────────────────────────────────────────────────
 
 def _build_evidence(item: MemoryItem) -> dict:
