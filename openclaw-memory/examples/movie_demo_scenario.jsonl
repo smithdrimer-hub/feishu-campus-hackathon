@@ -1,0 +1,56 @@
+{"scenario_id":"movie_demo_v1","title":"Movie Demo · 商城App v2.0 周三下午正卡","project_id":"movie-demo","description":"为 demo_movie.py 设计的 28 条事件场景：周一确立目标→周二出现问题→周三今天正在解决。设计上让所有 6 类 Pattern Memory 都能点亮 (handoff_risk / dependency_blocker / blocker_hotspot / stale_task / deadline_risk_score / responsibility_domain)。","events":[
+{"project_id":"movie-demo","chat_id":"oc_movie","message_id":"mv_001","text":"这周核心目标：商城App v2.0 周五前必须提测","created_at":"2026-05-04T09:00:00","sender":{"id":"ou_pm","name":"产品-何璐","sender_type":"user"}},
+{"project_id":"movie-demo","chat_id":"oc_movie","message_id":"mv_002","text":"前端我和小杨分，吴凡负责商品列表和购物车，小杨负责支付和订单","created_at":"2026-05-04T09:05:00","sender":{"id":"ou_fe1","name":"前端-吴凡","sender_type":"user"}},
+{"project_id":"movie-demo","chat_id":"oc_movie","message_id":"mv_003","text":"后端接口我出，争取今天把商品+购物车的接口调通","created_at":"2026-05-04T09:10:00","sender":{"id":"ou_be","name":"后端-马超","sender_type":"user"}},
+{"project_id":"movie-demo","chat_id":"oc_movie","message_id":"mv_004","text":"测试这边周四开始介入，需要你们周三前把主流程跑通","created_at":"2026-05-04T09:20:00","sender":{"id":"ou_qa","name":"测试-张蕾","sender_type":"user"}},
+{"project_id":"movie-demo","chat_id":"oc_movie","message_id":"mv_005","text":"决策：支付走微信支付，不接支付宝，产品已确认","created_at":"2026-05-04T10:00:00","sender":{"id":"ou_pm","name":"产品-何璐","sender_type":"user"}},
+{"project_id":"movie-demo","chat_id":"oc_movie","message_id":"mv_006","text":"前端框架定 Remix，不用 React 18，跟财务系统统一","created_at":"2026-05-04T10:05:00","sender":{"id":"ou_pm","name":"产品-何璐","sender_type":"user"}},
+{"project_id":"movie-demo","chat_id":"oc_movie","message_id":"mv_007","text":"小林你 UI 稿什么时候能给","created_at":"2026-05-04T11:00:00","sender":{"id":"ou_fe1","name":"前端-吴凡","sender_type":"user"}},
+{"project_id":"movie-demo","chat_id":"oc_movie","message_id":"mv_008","text":"v1 今天下午能给，v2 改版要看走查","created_at":"2026-05-04T11:05:00","sender":{"id":"ou_ui","name":"设计-小林","sender_type":"user"}},
+{"project_id":"movie-demo","chat_id":"oc_movie","message_id":"mv_009","text":"商品列表接口联调完，自测 ok","created_at":"2026-05-04T17:30:00","sender":{"id":"ou_fe1","name":"前端-吴凡","sender_type":"user"}},
+{"project_id":"movie-demo","chat_id":"oc_movie","message_id":"mv_010","text":"v1 UI 稿来了 [文件] mall_v1.fig","created_at":"2026-05-04T17:50:00","sender":{"id":"ou_ui","name":"设计-小林","sender_type":"user"}},
+
+{"project_id":"movie-demo","chat_id":"oc_movie","message_id":"mv_011","text":"产品 review 完了，登录页和支付页 UI 都需要重做 v2","created_at":"2026-05-05T09:30:00","sender":{"id":"ou_pm","name":"产品-何璐","sender_type":"user"}},
+{"project_id":"movie-demo","chat_id":"oc_movie","message_id":"mv_012","text":"那我下午赶 v2，明天上午能给","created_at":"2026-05-05T09:35:00","sender":{"id":"ou_ui","name":"设计-小林","sender_type":"user"}},
+{"project_id":"movie-demo","chat_id":"oc_movie","message_id":"mv_013","text":"我先做不依赖登录页的部分","created_at":"2026-05-05T09:40:00","sender":{"id":"ou_fe1","name":"前端-吴凡","sender_type":"user"}},
+{"project_id":"movie-demo","chat_id":"oc_movie","message_id":"mv_014","text":"阻塞：测试环境部署还在等运维审批，服务跑不起来","created_at":"2026-05-05T11:00:00","sender":{"id":"ou_be","name":"后端-马超","sender_type":"user"}},
+{"project_id":"movie-demo","chat_id":"oc_movie","message_id":"mv_015","text":"我去催一下运维","created_at":"2026-05-05T11:05:00","sender":{"id":"ou_pm","name":"产品-何璐","sender_type":"user"}},
+{"project_id":"movie-demo","chat_id":"oc_movie","message_id":"mv_016","text":"小杨明天有事请假一天，支付那边他先暂停","created_at":"2026-05-05T15:00:00","sender":{"id":"ou_fe2","name":"前端-小杨","sender_type":"user"}},
+{"project_id":"movie-demo","chat_id":"oc_movie","message_id":"mv_017","text":"国际化功能这版先不做，下个迭代再加","created_at":"2026-05-05T16:00:00","sender":{"id":"ou_pm","name":"产品-何璐","sender_type":"user"}},
+{"project_id":"movie-demo","chat_id":"oc_movie","message_id":"mv_018","text":"阻塞：登录页设计稿 v2 还没出，前端动不了","created_at":"2026-05-05T18:00:00","sender":{"id":"ou_fe1","name":"前端-吴凡","sender_type":"user"}},
+
+{"project_id":"movie-demo","chat_id":"oc_movie","message_id":"mv_019","text":"早上好，今天大家把昨天卡住的事说一下进度","created_at":"2026-05-06T09:00:00","sender":{"id":"ou_pm","name":"产品-何璐","sender_type":"user"}},
+{"project_id":"movie-demo","chat_id":"oc_movie","message_id":"mv_020","text":"小林，登录页 v2 设计稿还在等吗，前端动不了","created_at":"2026-05-06T09:30:00","sender":{"id":"ou_fe1","name":"前端-吴凡","sender_type":"user"}},
+{"project_id":"movie-demo","chat_id":"oc_movie","message_id":"mv_021","text":"阻塞：支付页设计稿 v2 也没出，小杨明天回来等不到稿子也没法做","created_at":"2026-05-06T10:00:00","sender":{"id":"ou_fe1","name":"前端-吴凡","sender_type":"user"}},
+{"project_id":"movie-demo","chat_id":"oc_movie","message_id":"mv_022","text":"v2 我下午 4 点前给你们，对不起拖了","created_at":"2026-05-06T10:30:00","sender":{"id":"ou_ui","name":"设计-小林","sender_type":"user"}},
+{"project_id":"movie-demo","chat_id":"oc_movie","message_id":"mv_023","text":"测试环境审批还在排队，后端服务跑不起来","created_at":"2026-05-06T11:00:00","sender":{"id":"ou_be","name":"后端-马超","sender_type":"user"}},
+{"project_id":"movie-demo","chat_id":"oc_movie","message_id":"mv_024","text":"我先在本地搭一套 mock，方便前端调试","created_at":"2026-05-06T11:10:00","sender":{"id":"ou_be","name":"后端-马超","sender_type":"user"}},
+{"project_id":"movie-demo","chat_id":"oc_movie","message_id":"mv_025","text":"测试用例我在写，主流程到位就能跑","created_at":"2026-05-06T11:30:00","sender":{"id":"ou_qa","name":"测试-张蕾","sender_type":"user"}},
+{"project_id":"movie-demo","chat_id":"oc_movie","message_id":"mv_026","text":"周五前必须联调完，不然来不及","created_at":"2026-05-06T14:00:00","sender":{"id":"ou_pm","name":"产品-何璐","sender_type":"user"}}
+],
+"expected_state_at_end":{
+  "project_goal":"商城App v2.0 周五前提测",
+  "owners":["吴凡-前端商品/购物车","小杨-前端支付/订单","马超-后端","小林-设计"],
+  "decisions":["支付走微信不接支付宝","前端用 Remix"],
+  "blockers_active":[
+    "登录页设计稿 v2 没出 (前端 吴凡, dependency=小林)",
+    "支付页设计稿 v2 没出 (前端 小杨, dependency=小林)",
+    "测试环境审批未下来 (后端 马超, dependency=运维)"
+  ],
+  "deferred":["国际化下个迭代再做"],
+  "deadline":"周五前联调完成",
+  "member_status":["小杨周三请假"]
+},
+"timeline":[
+  {"day":"Day1 Mon (2026-05-04)","summary":"目标设定 + 分工 + 决策（微信支付/Remix） + UI v1 来了"},
+  {"day":"Day2 Tue (2026-05-05)","summary":"产品 review → UI v2 改版（登录页+支付页都要重做）+ 后端被审批卡住 + 小杨明请假 + 国际化暂缓"},
+  {"day":"Day3 Wed (2026-05-06) ⚠ 故事发生当天","summary":"3 个 active blocker 同时存在：2 个设计稿（同 domain 触发 hotspot）+ 1 个测试环境（同 domain 即环境部署），1 人请假（触发 handoff_risk），周五 deadline（触发 deadline_risk_score）"}
+],
+"patterns_expected":[
+  "blocker_hotspot (设计 domain × 2 → 67%)",
+  "handoff_risk (小杨：active task + 请假)",
+  "dependency_blocker (3 个 blocker 都有 dependency_owner)",
+  "responsibility_domain (吴凡=商品+购物车, 小杨=支付+订单, 马超=后端)",
+  "deadline_risk_score (周五 deadline + 吴凡有阻塞)",
+  "stale_task (写完但等设计稿的任务 >1 天未推进)"
+]}

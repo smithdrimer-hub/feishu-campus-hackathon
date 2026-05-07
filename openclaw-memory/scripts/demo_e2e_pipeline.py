@@ -429,12 +429,25 @@ def main() -> None:
         return
 
     print("[5/5] 发送消息到群聊...")
-    send_result = adapter.send_message(
-        args.chat_id,
-        _markdown_safe(panel_text),
-        msg_type="markdown",
-        identity=args.identity,
+    # V1.18: 优先交互式卡片，异常时降级 markdown
+    import json as _json
+    from memory.card_renderer import (
+        render_handoff_card, render_standup_card, render_risk_card,
     )
+    try:
+        if args.standup:
+            card = render_standup_card(items, args.project_id)
+        else:
+            card = render_handoff_card(items, args.project_id)
+        send_result = adapter.send_message(
+            args.chat_id, _json.dumps(card, ensure_ascii=False),
+            msg_type="interactive", identity=args.identity,
+        )
+    except Exception:
+        send_result = adapter.send_message(
+            args.chat_id, _markdown_safe(panel_text),
+            msg_type="markdown", identity=args.identity,
+        )
     if send_result.returncode != 0:
         print(f"    发送失败: {send_result.stderr or send_result.stdout}")
     else:
