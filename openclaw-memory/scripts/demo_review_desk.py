@@ -157,10 +157,13 @@ def parse_args() -> argparse.Namespace:
                         help="Chat ID for Feishu group role verification")
     parser.add_argument("--all", action="store_true",
                         help="Show all memories, not just needs_review")
+    parser.add_argument("--vector-search", action="store_true",
+                        help="Use vector similarity for merge suggestions (requires embedding API)")
     return parser.parse_args()
 
 
-def list_review(store: MemoryStore, project_id: str | None, show_all: bool) -> int:
+def list_review(store: MemoryStore, project_id: str | None, show_all: bool,
+                vector_store=None) -> int:
     """List pending review items with enhanced evidence display. Returns count."""
     items = store.list_items(project_id)
     pending = [
@@ -229,7 +232,7 @@ def list_review(store: MemoryStore, project_id: str | None, show_all: bool) -> i
             print(f"     supersedes: {len(item.supersedes)} older version(s)")
 
         # V1.15 OPT-4: suggest similar items for potential merge
-        similar = _find_similar(items, item)
+        similar = _find_similar(items, item, vector_store=vector_store)
         if similar:
             print(f"     similar (consider --merge):")
             for sim_id, sim_val, sim_score in similar[:2]:
@@ -242,15 +245,38 @@ def list_review(store: MemoryStore, project_id: str | None, show_all: bool) -> i
 
 def _find_similar(
     items: list, target, threshold: float = 0.35,
+    vector_store=None,
 ) -> list[tuple[str, str, float]]:
-    """Find items with similar content to target for merge suggestion."""
+    """Find items with similar content to target for merge suggestion.
+
+    V1.18: 支持向量语义相似度（需 vector_store 参数）。
+    """
+    # 优先向量搜索
+    if vector_store and getattr(vector_store, "available", False):
+        try:
+            vec_results = vector_store.search(
+                target.current_value, top_k=5,
+            )
+            results = []
+            for mid, sim in vec_results:
+                if mid == target.memory_id:
+                    continue
+                for item in items:
+                    if item.memory_id == mid and item.state_type == target.state_type:
+                        results.append((mid, item.current_value, sim))
+                        break
+            if results:
+                return results
+        except Exception:
+            pass  # fall through to bigram
+
+    # 回退 bigram 相似度
     results = []
     for item in items:
         if item.memory_id == target.memory_id:
             continue
         if item.state_type != target.state_type:
             continue
-        # Simple bigram similarity
         def _bigrams(t):
             t = t.replace(" ", "").lower()
             return {t[i:i+2] for i in range(len(t)-1)}
@@ -304,6 +330,25 @@ def main() -> None:
     store = MemoryStore(data_dir)
     store.ensure_files()
 
+    # V1.18: 向量搜索（可选）
+    vs = None
+    if args.vector_search:
+        try:
+            import yaml
+            cfg = yaml.safe_load((ROOT / "config.local.yaml").read_text(encoding="utf-8"))
+            emb_cfg = cfg.get("embedding", {})
+            from memory.embedding_provider import OpenAIEmbeddingProvider
+            from memory.vector_store import VectorStore
+            emb = OpenAIEmbeddingProvider(
+                api_key=emb_cfg.get("api_key", ""),
+                base_url=emb_cfg.get("base_url", ""),
+                model=emb_cfg.get("model", ""),
+            )
+            vs = VectorStore(str(data_dir / "chroma"), emb)
+            print(f"  Vector store: {vs.stats().get('memories', 0)} items indexed")
+        except Exception as e:
+            print(f"  Vector store unavailable: {e}")
+
     is_write = any([args.approve, args.reject, args.modify, args.merge,
                     args.blocker_status])
     if is_write:
@@ -345,7 +390,7 @@ def main() -> None:
         print("=" * 60)
         print("  Project Steward Review Desk")
         print("=" * 60)
-        count = list_review(store, args.project_id, args.all)
+        count = list_review(store, args.project_id, args.all, vector_store=vs)
         if count > 0:
             print(f"  Use --approve / --reject / --modify / --merge with memory_id.")
         print()

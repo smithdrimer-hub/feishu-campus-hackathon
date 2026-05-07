@@ -104,6 +104,33 @@ class VectorStore:
         import gc
         gc.collect()
 
+    def index_items_batch(
+        self, items: list, delay: float = 0.8, max_retries: int = 3,
+    ) -> int:
+        """V1.18: 批量索引，item 间延迟避免 API 429 限流。
+
+        Returns number of successfully indexed items.
+        """
+        if not self._available:
+            return 0
+        import time
+        indexed = 0
+        for item in items:
+            for attempt in range(max_retries):
+                try:
+                    self.index_item(item)
+                    indexed += 1
+                    break
+                except Exception as e:
+                    err = str(e)
+                    if "429" in err and attempt < max_retries - 1:
+                        wait = (attempt + 1) * 5
+                        time.sleep(wait)
+                    else:
+                        break
+            time.sleep(delay)
+        return indexed
+
     def index_item(self, item: "MemoryItem") -> None:
         """Index or update a single MemoryItem in both collections."""
         if not self._available:
