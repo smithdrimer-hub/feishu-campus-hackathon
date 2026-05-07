@@ -47,6 +47,12 @@ python scripts/demo_movie.py --all --feishu     # 一键发完 6 张飞书卡片
 
 每张卡片均**真实通过 lark-cli 投递到飞书群**，每条信息附 📎 sender + 原文 + 飞书可点击链接。
 
+![项目交接摘要卡片](docs/screenshot/项目交接摘要.png)
+
+![记忆录入审核](docs/screenshot/记忆录入审核.png)
+
+![自动指派任务](docs/screenshot/自动指派任务.png)
+
 ---
 
 ## Memory Engine ≠ Chat History

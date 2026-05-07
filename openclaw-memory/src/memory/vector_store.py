@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_SIMILARITY_THRESHOLD = 0.35
+DEFAULT_SIMILARITY_THRESHOLD = 0.25  # ElectronHub 向量质量偏低，降低阈值
 
 
 class VectorStore:
