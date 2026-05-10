@@ -119,8 +119,9 @@ class EventStreamListener:
             self._last_event_time = time.time()
             self._retry_count = 0  # reset on successful event
 
-            # Filter by chat_id
+            # Filter by chat_id（reaction 事件无 chat_id，不筛选）
             ev_chat = event.get("chat_id", "")
+            ev_type = event.get("type", event.get("event_type", ""))
             if self.chat_id and ev_chat and ev_chat != self.chat_id:
                 continue
 

@@ -31,6 +31,7 @@ import argparse
 import json
 import logging
 import sys
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -258,7 +259,7 @@ def _handle_reaction(event: dict, data_dir: str, project_id: str,
     if "reaction" not in etype:
         return False
 
-    emoji = event.get("emoji_type", event.get("reaction_type", ""))
+    emoji = event.get("emoji_type", event.get("reaction_type", "")).lower()
     msg_id = event.get("message_id", "")
 
     # Only process reactions on bot messages (confirmation questions)
@@ -268,25 +269,62 @@ def _handle_reaction(event: dict, data_dir: str, project_id: str,
     from memory.store import MemoryStore
     from memory.reply_handler import find_question
     store = MemoryStore(Path(data_dir))
-    question = find_question(msg_id)  # check if this was a question we sent
+    question = find_question(msg_id)
+    if not question:
+        return False
 
-    if emoji in ("OK", "thumbsup", "WHITE_HEAVY_CHECK_MARK"):
-        # Approve: find pending items and mark approved
-        pending = [i for i in store.list_items(project_id)
-                   if getattr(i, "review_status", "") == "needs_review"]
-        for item in pending[:5]:
-            store.update_item_review(item.memory_id, "approved")
-        adapter.send_message(chat_id, f"已确认 {min(len(pending), 5)} 项")
-        logger.info("Reaction approved: %s → %d items", emoji, min(len(pending), 5))
+    # V1.18: 表情撤回 → 忽略（飞书发送 action="removed"）
+    action = event.get("action", "added")
+    if action == "removed":
+        logger.info("Reaction removed: %s on %s", emoji, msg_id[:20])
         return True
 
-    if emoji in ("NEGATIVE_SQUARED_CROSS_MARK", "thumbsdown", "x"):
-        pending = [i for i in store.list_items(project_id)
-                   if getattr(i, "review_status", "") == "needs_review"]
+    _YES_EMOJI = {"ok", "thumbsup", "like", "heart", "+1", "clap", "heavy_check_mark"}
+    _NO_EMOJI = {"thumbsdown", "x", "dislike", "-1", "no_good", "facepalm",
+                  "cross", "fail", "no", "negative_squared_cross_mark"}
+
+    if emoji not in _YES_EMOJI and emoji not in _NO_EMOJI:
+        return False
+
+    # V1.18: 5 秒消抖——用户可能在改主意，等反应稳定后再执行
+    _REACTION_TIMER: dict[str, tuple] = {}
+    import threading
+    now = time.time()
+    last = _REACTION_TIMER.get(msg_id)
+    if last:
+        last_time, last_timer = last
+        if now - last_time < 5:
+            last_timer.cancel()
+    delay = 5.0
+    timer = threading.Timer(delay, _execute_reaction,
+                            args=[msg_id, emoji, _YES_EMOJI, _NO_EMOJI,
+                                  store, project_id, adapter, chat_id])
+    timer.start()
+    _REACTION_TIMER[msg_id] = (now, timer)
+    logger.info("Reaction queued (%ss debounce): %s on %s", delay, emoji, msg_id[:20])
+    return True
+
+
+def _execute_reaction(msg_id, emoji, yes_set, no_set, store, project_id, adapter, chat_id):
+    """V1.18: 消抖后执行反应确认/驳回。"""
+    pending = [i for i in store.list_items(project_id)
+               if getattr(i, "review_status", "") == "needs_review"]
+    if emoji in yes_set:
+        if not pending:
+            adapter.send_message(chat_id, "当前没有待确认项，无需确认")
+            return True
+        for item in pending[:5]:
+            store.update_item_review(item.memory_id, "approved")
+        adapter.send_message(chat_id, f"已确认 {len(pending[:5])}/{len(pending)} 项待确认")
+        return True
+
+    if emoji in no_set:
+        if not pending:
+            adapter.send_message(chat_id, "当前没有待驳回项")
+            return True
         for item in pending[:5]:
             store.update_item_review(item.memory_id, "rejected")
-        adapter.send_message(chat_id, f"已驳回 {min(len(pending), 5)} 项")
-        logger.info("Reaction rejected: %s → %d items", emoji, min(len(pending), 5))
+        adapter.send_message(chat_id, f"已驳回 {len(pending[:5])}/{len(pending)} 项待确认")
         return True
 
     return False

@@ -181,8 +181,21 @@ class ActionExecutor:
             chat_id=chat_id, content=content, msg_type=msg_type,
         )
 
+        # V1.18: R4确认提问 → 记录msg_id用于后续reply/reaction检测
+        is_confirm = action.metadata.get("is_confirmation_question", False)
+        if is_confirm:
+            from memory.reply_handler import record_question
+            msg_id = ""
+            if result.data:
+                inner = result.data.get("data", result.data)
+                msg_id = str(inner.get("message_id", ""))
+            if msg_id:
+                candidates = action.metadata.get("candidate_count", 0)
+                record_question(msg_id, [str(candidates)],
+                                ctx.get("project_id", ""))
+
         msg_id = ""
-        if result.data:
+        if result.data and not is_confirm:
             inner = result.data.get("data", result.data)
             msg_id = str(inner.get("message_id", ""))
 

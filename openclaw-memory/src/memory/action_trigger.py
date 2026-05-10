@@ -482,7 +482,8 @@ class ActionTrigger:
             target_chat_id=chat_id,
             target_owner=best_owner,
             metadata={"alert_detail": msg_text, "candidate_count": len(group),
-                      "candidate_owner": best_owner},
+                      "candidate_owner": best_owner,
+                      "is_confirmation_question": True},  # V1.18
         )]
 
     def _is_cooling_down_person(self, person_key: str, cooldown_seconds: float) -> bool:
