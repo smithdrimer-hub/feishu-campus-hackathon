@@ -22,12 +22,14 @@ QUESTION_MAP_PATH = "data/question_map.jsonl"
 
 
 def record_question(question_msg_id: str, candidates: list[str],
-                    project_id: str = "") -> None:
+                    project_id: str = "",
+                    candidate_identity_keys: list[str] | None = None) -> None:
     """Record a sent confirmation question for later reply matching."""
     entry = {
         "question_msg_id": question_msg_id,
         "candidates": candidates,
         "project_id": project_id,
+        "candidate_identity_keys": candidate_identity_keys or [],
     }
     path = Path(QUESTION_MAP_PATH)
     path.parent.mkdir(parents=True, exist_ok=True)

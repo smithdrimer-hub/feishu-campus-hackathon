@@ -22,6 +22,40 @@ from memory.action_log import has_recent_action, write_action_log
 from memory.date_parser import deadline_is_imminent
 from memory.schema import MemoryItem
 
+# ── R4 ignore list (24h cooldown per identity_key) ────────────────
+
+_IGNORE_LIST_PATH = Path("data/ignore_list.jsonl")
+
+
+def _is_ignored(identity_key: str) -> bool:
+    """Check if an identity_key has been ignored within the last 24 hours."""
+    if not _IGNORE_LIST_PATH.exists():
+        return False
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+    for line in _IGNORE_LIST_PATH.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            entry = json.loads(line)
+            if entry.get("identity_key") == identity_key:
+                ts = entry.get("ignored_at", "")
+                if ts and datetime.fromisoformat(ts) > cutoff:
+                    return True
+        except (json.JSONDecodeError, ValueError):
+            pass
+    return False
+
+
+def write_ignore_entry(identity_key: str) -> None:
+    """Write an identity_key to the ignore list with current timestamp."""
+    _IGNORE_LIST_PATH.parent.mkdir(parents=True, exist_ok=True)
+    entry = {
+        "identity_key": identity_key,
+        "ignored_at": datetime.now(timezone.utc).isoformat(),
+    }
+    with _IGNORE_LIST_PATH.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
 
 class ActionTrigger:
     """Scan upsert diffs and generate action proposals via trigger rules.
@@ -388,14 +422,10 @@ class ActionTrigger:
     def _rule_low_confidence_question(
         self, diff: dict[str, list], project_id: str, chat_id: str,
     ) -> list[ActionProposal]:
-        """R4: 低置信度候选 → 聚合确认消息发送到群。
+        """R4: 每次只问 1 条，避免歧义。
 
-        五大约束：
-        1. 按人聚合 — 同一人合并为一条
-        2. 冷却 — 同人2h + 同候选24h
-        3. 门槛 — 有owner+无自指代+有证据+非闲聊+置信度区间
-        4. 上限 — 每轮1条消息，最多5个候选
-        5. 延迟 — 来源消息至少30分钟前
+        约束：冷却(同人2h+同候选24h)、门槛(owner+证据+非闲聊)、
+        置信度区间(0.35~0.60)、来源消息延迟30min。
         """
         if not chat_id:
             return []
@@ -403,10 +433,9 @@ class ActionTrigger:
         from datetime import datetime, timedelta, timezone
         now = datetime.now(timezone.utc)
         delay_cutoff = (now - timedelta(minutes=30)).isoformat()
-        person_cooldown = 2 * 3600  # 2 hours
+        person_cooldown = 2 * 3600
 
-        # ── 筛选候选 ──
-        candidates: list[tuple] = []  # (item, owner)
+        # ── 筛选候选（每次只取 1 条） ──
         for item in diff.get("created", []):
             if item.state_type not in ("next_step", "decision"):
                 continue
@@ -417,16 +446,13 @@ class ActionTrigger:
                 continue
             if not item.source_refs:
                 continue
-            # 置信度区间: 太低不值得问，太高直接通过
             if not (0.35 <= item.confidence < 0.60):
                 continue
-            # 非闲聊/问句/反问
             text = item.current_value
             if text.rstrip().endswith(("？", "?", "吗", "呢", "吧")):
                 continue
             if any(w in text for w in ("请问", "谁知道", "有没有人", "怎么配")):
                 continue
-            # 来源消息延迟30分钟
             src_time = item.source_refs[0].created_at if item.source_refs else ""
             if src_time and src_time > delay_cutoff:
                 continue
@@ -436,55 +462,40 @@ class ActionTrigger:
             )
             if self._is_cooling_down(id_key):
                 continue
-            candidates.append((item, owner, id_key))
-
-        if not candidates:
-            return []
-
-        # ── 按人聚合 ──
-        by_owner: dict[str, list] = {}
-        for item, owner, id_key in candidates:
             # 冷却: 同人2h
             person_key = f"r4_person_{owner}"
             if self._is_cooling_down_person(person_key, person_cooldown):
                 continue
-            by_owner.setdefault(owner, []).append((item, id_key))
 
-        if not by_owner:
-            return []
+            # V1.18: 检查 24h 忽略列表
+            if _is_ignored(item.identity_key()):
+                continue
 
-        # 选人数最多的一组（最多5个候选）
-        best_owner = max(by_owner, key=lambda o: len(by_owner[o]))
-        group = by_owner[best_owner][:5]
-
-        # ── 生成确认消息 ──
-        lines = [f"@{best_owner} 系统识别到以下可能与你相关的待办，请确认：", ""]
-        for i, (item, _) in enumerate(group, 1):
+            # ── 生成单条确认消息 ──
             src = item.source_refs[0] if item.source_refs else None
             time_hint = src.created_at[:16] if src and src.created_at else ""
-            lines.append(f"{i}. {item.current_value[:100]}（{time_hint}）")
-        lines.append("")
-        lines.append("回复\"确认1,2\"或\"都不是\"，或在消息上点 👍 确认 / ❌ 驳回")
+            msg_text = (
+                f"@{owner} 系统识别到可能与你相关的待办：\n\n"
+                f"{item.current_value[:150]}（{time_hint}）\n\n"
+                f"回复\"确认\"创建飞书任务，回复\"都不是\"跳过。"
+            )
 
-        msg_text = "\n".join(lines)
-        id_key = ActionProposal.make_idempotency_key(
-            "r4_question_aggregated", project_id, best_owner
-        )
-
-        return [ActionProposal(
-            action_type="send_alert",
-            title=f"确认请求：{best_owner} 的 {len(group)} 个待办候选",
-            reason=f"低置信度候选 ({len(group)} 项)，发送确认请求给 {best_owner}",
-            confidence=0.5,
-            risk_level="low",
-            requires_confirmation=False,
-            idempotency_key=id_key,
-            target_chat_id=chat_id,
-            target_owner=best_owner,
-            metadata={"alert_detail": msg_text, "candidate_count": len(group),
-                      "candidate_owner": best_owner,
-                      "is_confirmation_question": True},  # V1.18
-        )]
+            return [ActionProposal(
+                action_type="send_alert",
+                title=f"确认请求：{owner} — {item.current_value[:40]}",
+                reason=f"低置信度候选，发送确认请求给 {owner}",
+                confidence=0.5,
+                risk_level="low",
+                requires_confirmation=False,
+                idempotency_key=id_key,
+                target_chat_id=chat_id,
+                target_owner=owner,
+                metadata={"alert_detail": msg_text, "candidate_count": 1,
+                          "candidate_owner": owner,
+                          "is_confirmation_question": True,
+                          "candidate_identity_keys": [item.identity_key()]},
+            )]
+        return []
 
     def _is_cooling_down_person(self, person_key: str, cooldown_seconds: float) -> bool:
         """检查同人冷却（独立于同候选冷却）。"""

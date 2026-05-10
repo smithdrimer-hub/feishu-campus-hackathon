@@ -108,10 +108,24 @@ def _is_duplicate(msg_id: str) -> bool:
 
 
 def _check_confirmation_reply(text: str, chat_id: str, adapter,
-                              project_id: str = "", data_dir: str = "") -> bool:
-    """V1.18 R4闭环: 检测确认回复 → 标记 approved → 回复群。"""
-    from memory.reply_handler import parse_confirmation
+                              project_id: str = "", data_dir: str = "",
+                              root_msg_id: str = "") -> bool:
+    """V1.18 R4闭环: 仅检测对 bot 确认消息的回复 → 标记 approved/rejected → 回复群。
+
+    V1.18.1: 只处理 root_id 匹配 question_map.jsonl 的回复消息，忽略普通聊天。
+    当用户回复"都不是"时，将候选 identity_key 写入 ignore_list.jsonl（24h 冷却）。
+    """
+    if not root_msg_id:
+        return False  # 不是回复消息，跳过
+
+    from memory.reply_handler import parse_confirmation, find_question
     from memory.store import MemoryStore
+    from memory.action_trigger import write_ignore_entry
+
+    question = find_question(root_msg_id)
+    if not question:
+        return False  # 回复的不是我们的确认问题
+
     is_conf, indices = parse_confirmation(text)
     if not is_conf:
         return False
@@ -126,9 +140,13 @@ def _check_confirmation_reply(text: str, chat_id: str, adapter,
                     store.update_item_review(pending[idx - 1].memory_id, "approved")
             msg = f"已确认 {len(indices)} 项，可通过审核台查看。"
         else:
+            # "都不是" → 写入 24h 忽略列表
+            ignored_keys = question.get("candidate_identity_keys", [])
+            for key in ignored_keys:
+                write_ignore_entry(key)
             for item in pending[:5]:
                 store.update_item_review(item.memory_id, "rejected")
-            msg = "已标记为不需要创建任务。"
+            msg = "已标记为不需要创建任务（24h 内不再询问相同候选）。"
         adapter.send_message(chat_id, msg)
         logger.info("R4 closed: %s → %s", text[:50], msg)
     return True
@@ -138,18 +156,20 @@ def _check_confirmation_reply(text: str, chat_id: str, adapter,
 
 def process_message(text: str, chat_id: str, project_id: str,
                     data_dir: str, adapter, dry_run: bool = False,
-                    msg_id: str = "", use_hybrid: bool = False):
+                    msg_id: str = "", use_hybrid: bool = False,
+                    root_msg_id: str = ""):
     """Full pipeline on one new message: extract → trigger → execute.
 
     V1.18: 支持 R4 确认回复闭环 + 消息去重 + Hybrid 模式。
+    V1.18.1: root_msg_id 用于检测回复消息是否针对 bot 确认提问。
     """
     # 去重
     if _is_duplicate(msg_id):
         logger.debug("Skipping duplicate: %s", msg_id[:20])
         return [], []
 
-    # R4 确认回复检测
-    if _check_confirmation_reply(text, chat_id, adapter, project_id, data_dir):
+    # R4 确认回复检测（仅处理对 bot 确认消息的回复）
+    if _check_confirmation_reply(text, chat_id, adapter, project_id, data_dir, root_msg_id):
         return [], []
 
     from memory.store import MemoryStore
@@ -349,13 +369,15 @@ def ws_listen(chat_id: str, project_id: str, data_dir: str,
 
         text = event.get("content", event.get("text", ""))
         msg_id = event.get("message_id", "")
+        root_msg_id = event.get("root_id", event.get("parent_id", ""))
         if not text:
             return
         if _is_duplicate(msg_id):
             return
         logger.info("WS event: %s", text[:60])
         process_message(text, chat_id, project_id, data_dir, adapter,
-                        dry_run, msg_id=msg_id, use_hybrid=use_hybrid)
+                        dry_run, msg_id=msg_id, use_hybrid=use_hybrid,
+                        root_msg_id=root_msg_id)
 
     listener.on_event = on_event
     logger.info("WebSocket listener starting for chat %s...", chat_id)
@@ -387,10 +409,12 @@ def poll_listen(chat_id: str, project_id: str, data_dir: str,
                 if not text or msg.get("msg_type") == "system":
                     continue
 
+                root_msg_id = msg.get("root_id", msg.get("parent_id", ""))
                 logger.info("Poll event: %s", text[:60])
                 process_message(text, chat_id, project_id, data_dir,
                                 adapter, dry_run, msg_id=msg_id,
-                                use_hybrid=use_hybrid)
+                                use_hybrid=use_hybrid,
+                                root_msg_id=root_msg_id)
 
         except Exception as e:
             logger.warning("Poll error: %s", e)

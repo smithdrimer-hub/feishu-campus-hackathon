@@ -191,8 +191,10 @@ class ActionExecutor:
                 msg_id = str(inner.get("message_id", ""))
             if msg_id:
                 candidates = action.metadata.get("candidate_count", 0)
+                candidate_keys = action.metadata.get("candidate_identity_keys", [])
                 record_question(msg_id, [str(candidates)],
-                                ctx.get("project_id", ""))
+                                ctx.get("project_id", ""),
+                                candidate_identity_keys=candidate_keys)
 
         msg_id = ""
         if result.data and not is_confirm:
