@@ -769,11 +769,10 @@ class MemoryEngine:
     # ── V1.15: 任务状态回流 ─────────────────────────────────────
 
     def sync_task_status(self, data_dir: str | None = None) -> int:
-        """Query Feishu tasks created by this engine and update memory status.
+        """V1.18: 任务状态回流——检测飞书中已完成的任务→更新 MemoryItem。
 
-        Reads task_map.jsonl for task_guid → memory mapping, then queries
-        each task's current status. Updates corresponding next_step items:
-        - completed → status="resolved" in metadata
+        读取 task_map.jsonl 中的 task_guid，查飞书任务状态。
+        completed/done → 对应 next_step 标为 task_status="completed"。
         """
         import json as _json
         task_map_path = Path(data_dir or self.store.data_dir) / "task_map.jsonl"
@@ -793,7 +792,7 @@ class MemoryEngine:
 
         updated = 0
         seen = set()
-        for entry in entries[-50:]:  # Last 50 tasks
+        for entry in entries[-50:]:
             guid = entry.get("task_guid", "")
             if not guid or guid in seen:
                 continue
@@ -811,13 +810,28 @@ class MemoryEngine:
                 if status in ("completed", "done"):
                     items = self.store.list_items(entry.get("project_id", ""))
                     summary = entry.get("summary", "")
+                    matched = False
                     for item in items:
-                        if item.state_type == "next_step" and summary[:30] in item.current_value:
-                            item.metadata["task_status"] = "completed"
-                            item.metadata["task_guid"] = guid
-                            self.store._sweep_resolved_blockers()  # reuse save
+                        if item.state_type != "next_step":
+                            continue
+                        if summary[:30] in item.current_value or \
+                           item.current_value[:30] in summary:
+                            meta = dict(getattr(item, "metadata", {}) or {})
+                            meta["task_status"] = "completed"
+                            meta["task_guid"] = guid
+                            item.metadata = meta
+                            matched = True
                             updated += 1
                             break
+                    if matched:
+                        break  # one match per task_guid is enough
+
+        if updated > 0:
+            state = self.store.load_state()
+            items = [MemoryItem.from_dict(i) for i in state.get("items", [])]
+            history = [MemoryItem.from_dict(h) for h in state.get("history", [])]
+            processed = state.get("processed_event_ids", [])
+            self.store.save_state(items, history, processed)
 
         return updated
 

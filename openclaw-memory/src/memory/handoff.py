@@ -11,7 +11,7 @@ from memory.schema import MemoryItem, SourceRef
 SECTION_TITLES = {
     "project_goal": "当前项目目标",
     "owner": "当前负责人",
-    "decision": "当前关键决策",
+    "decision": "决策时间线",
     "deadline": "截止时间与期限",
     "deferred": "重要暂缓事项及原因",
     "blocker": "当前阻塞与风险",
@@ -31,6 +31,14 @@ def generate_handoff(project_id: str, items: Iterable[MemoryItem]) -> str:
     lines = [f"# 中断续办交接摘要：{project_id}", ""]
     for state_type, title in SECTION_TITLES.items():
         lines.append(f"## {title}")
+        if state_type == "decision":
+            from memory.project_state import render_decision_timeline
+            history = items_list  # decisions in active already
+            lines.append(render_decision_timeline(
+                [i for i in items_list if i.state_type == "decision"],
+                None, project_id))
+            lines.append("")
+            continue
         if state_type == "pattern":
             from memory.pattern_memory import generate_all_patterns
             patterns = generate_all_patterns(items_list, project_id)

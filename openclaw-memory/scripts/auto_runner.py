@@ -100,6 +100,16 @@ def run_pipeline(project: dict, dry_run: bool = True) -> None:
         items = engine.extractor.extract(events)
     logger.info("[%s] Extracted %d active items", project_id, len(items))
 
+    # V1.18: 任务状态回流（检测飞书中已完成的任务）
+    if not dry_run:
+        try:
+            reflow = engine.sync_task_status(str(store.data_dir))
+            if reflow > 0:
+                logger.info("[%s] Task backflow: %d completed", project_id, reflow)
+                items = store.list_items(project_id)  # refresh after backflow
+        except Exception:
+            pass
+
     # Generate state panel (preview mode — no auto send)
     from memory.project_state import build_group_project_state, \
         render_group_state_panel_text

@@ -709,6 +709,64 @@ def render_cross_project_text(ctx: dict[str, Any]) -> str:
     return "\n".join(lines).strip() + "\n"
 
 
+# ── V1.18: 决策时间线 ──────────────────────────────────────────
+
+def render_decision_timeline(active_items: list[MemoryItem],
+                              history_items: list[MemoryItem] | None = None,
+                              project_id: str = "") -> str:
+    """Render a decision event timeline with status badges.
+
+    V1.18: 决策事件流 + 状态标记 + 证据引用。不分析原因。
+    """
+    all_items = list(active_items)
+    if history_items:
+        all_items.extend(history_items)
+    decisions = [i for i in all_items if i.state_type == "decision"]
+    if not decisions:
+        return "## 项目决策时间线\n\n暂无决策记录。"
+
+    # Sort by source_ref timestamp
+    def _sort_key(item):
+        ref = item.source_refs[0] if item.source_refs else None
+        return ref.created_at if ref and ref.created_at else ""
+
+    decisions.sort(key=_sort_key)
+
+    lines = [f"## 项目决策时间线 — {project_id or ''}", ""]
+    lines.append("| 时间 | 决策内容 | 状态 | 来源 |")
+    lines.append("|------|---------|------|------|")
+
+    for item in decisions:
+        ref = item.source_refs[0] if item.source_refs else None
+        time_str = (ref.created_at[:16] if ref and ref.created_at else "?")
+        sender = ref.sender_name if ref and ref.sender_name else "?"
+        content = item.current_value[:80]
+        url = ref.source_url if ref and ref.source_url else ""
+
+        # Determine status
+        meta = getattr(item, "metadata", None) or {}
+        rs = getattr(item, "review_status", "")
+        cf = meta.get("conflict_status", "")
+
+        if rs == "rejected":
+            status = "🔒 已驳回"
+        elif cf == "conflicting":
+            status = "⚡ 冲突中"
+        elif rs == "needs_review":
+            status = "⚠️ 待审核"
+        elif item.status == "active":
+            status = "✅ 有效"
+        else:
+            status = "~~已失效~~"
+
+        src = f"[{sender}]({url})" if url else sender
+        lines.append(f"| {time_str} | {content} | {status} | {src} |")
+
+    lines.append("")
+    lines.append(f"*共 {len(decisions)} 条决策记录，点击来源可跳转飞书消息*")
+    return "\n".join(lines)
+
+
 # ── V1.15: 站会摘要 ────────────────────────────────────────────
 
 def render_standup_summary(

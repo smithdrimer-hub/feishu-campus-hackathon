@@ -155,6 +155,10 @@ def parse_args() -> argparse.Namespace:
                         help="Explicit steward open_id (overrides auto-detect)")
     parser.add_argument("--chat-id", default="",
                         help="Chat ID for Feishu group role verification")
+    parser.add_argument("--timeline", action="store_true",
+                        help="Show decision timeline (active + history)")
+    parser.add_argument("--handover", action="store_true",
+                        help="Generate handover brief for new team members")
     parser.add_argument("--all", action="store_true",
                         help="Show all memories, not just needs_review")
     parser.add_argument("--vector-search", action="store_true",
@@ -386,6 +390,15 @@ def main() -> None:
         do_review(store, args.modify, "modify", args.value)
     elif args.merge:
         do_review(store, args.merge, "merge")
+    elif args.timeline:
+        from memory.project_state import render_decision_timeline
+        active = store.list_items(args.project_id)
+        history = store.list_history(args.project_id)
+        print(render_decision_timeline(active, history, args.project_id or ""))
+    elif args.handover:
+        from memory.handover import render_handover_brief
+        active = store.list_items(args.project_id)
+        print(render_handover_brief(active, args.project_id or ""))
     else:
         print("=" * 60)
         print("  Project Steward Review Desk")

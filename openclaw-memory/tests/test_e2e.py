@@ -109,7 +109,7 @@ class TestE2EFullPipeline(unittest.TestCase):
         self.assertIsInstance(handoff, str)
         self.assertGreater(len(handoff), 50, "Handoff should be substantial text")
         # Handoff should contain section titles
-        for section in ("当前项目目标", "当前负责人", "当前关键决策",
+        for section in ("当前项目目标", "当前负责人", "决策时间线",
                         "重要暂缓事项", "当前阻塞与风险", "建议下一步"):
             self.assertIn(section, handoff,
                           f"Handoff should contain section: {section}")

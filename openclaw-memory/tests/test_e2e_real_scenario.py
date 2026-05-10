@@ -357,7 +357,7 @@ class TestFullProjectScenario(unittest.TestCase):
         items = self.store.list_items(PROJECT_ID)
         handoff = generate_handoff(PROJECT_ID, items)
 
-        for section in ("当前项目目标", "当前负责人", "当前关键决策",
+        for section in ("当前项目目标", "当前负责人", "决策时间线",
                         "截止时间与期限", "重要暂缓事项", "当前阻塞与风险",
                         "建议下一步", "成员状态与可用性"):
             self.assertIn(section, handoff,
