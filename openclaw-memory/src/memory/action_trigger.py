@@ -464,7 +464,7 @@ class ActionTrigger:
             time_hint = src.created_at[:16] if src and src.created_at else ""
             lines.append(f"{i}. {item.current_value[:100]}（{time_hint}）")
         lines.append("")
-        lines.append("以上是否需要创建飞书任务？回复\"确认1,2\"或\"都不是\"")
+        lines.append("回复\"确认1,2\"或\"都不是\"，或在消息上点 👍 确认 / ❌ 驳回")
 
         msg_text = "\n".join(lines)
         id_key = ActionProposal.make_idempotency_key(

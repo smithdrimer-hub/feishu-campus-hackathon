@@ -159,6 +159,10 @@ def parse_args() -> argparse.Namespace:
                         help="Show decision timeline (active + history)")
     parser.add_argument("--handover", action="store_true",
                         help="Generate handover brief for new team members")
+    parser.add_argument("--weekly", action="store_true",
+                        help="Generate evidence-backed weekly report draft")
+    parser.add_argument("--days", type=int, default=7,
+                        help="Days to look back for --weekly (default: 7)")
     parser.add_argument("--all", action="store_true",
                         help="Show all memories, not just needs_review")
     parser.add_argument("--vector-search", action="store_true",
@@ -399,6 +403,10 @@ def main() -> None:
         from memory.handover import render_handover_brief
         active = store.list_items(args.project_id)
         print(render_handover_brief(active, args.project_id or ""))
+    elif args.weekly:
+        from memory.handover import render_weekly_report
+        active = store.list_items(args.project_id)
+        print(render_weekly_report(active, args.project_id or "", args.days))
     else:
         print("=" * 60)
         print("  Project Steward Review Desk")

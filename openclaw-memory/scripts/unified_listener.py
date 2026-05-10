@@ -251,6 +251,47 @@ def process_message(text: str, chat_id: str, project_id: str,
 
 # ── WebSocket mode ─────────────────────────────────────────────
 
+def _handle_reaction(event: dict, data_dir: str, project_id: str,
+                     chat_id: str, adapter) -> bool:
+    """V1.18: 检测表情反应 → approve/reject。返回 True 表示已处理。"""
+    etype = event.get("type", event.get("event_type", ""))
+    if "reaction" not in etype:
+        return False
+
+    emoji = event.get("emoji_type", event.get("reaction_type", ""))
+    msg_id = event.get("message_id", "")
+
+    # Only process reactions on bot messages (confirmation questions)
+    if not msg_id:
+        return False
+
+    from memory.store import MemoryStore
+    from memory.reply_handler import find_question
+    store = MemoryStore(Path(data_dir))
+    question = find_question(msg_id)  # check if this was a question we sent
+
+    if emoji in ("OK", "thumbsup", "WHITE_HEAVY_CHECK_MARK"):
+        # Approve: find pending items and mark approved
+        pending = [i for i in store.list_items(project_id)
+                   if getattr(i, "review_status", "") == "needs_review"]
+        for item in pending[:5]:
+            store.update_item_review(item.memory_id, "approved")
+        adapter.send_message(chat_id, f"已确认 {min(len(pending), 5)} 项")
+        logger.info("Reaction approved: %s → %d items", emoji, min(len(pending), 5))
+        return True
+
+    if emoji in ("NEGATIVE_SQUARED_CROSS_MARK", "thumbsdown", "x"):
+        pending = [i for i in store.list_items(project_id)
+                   if getattr(i, "review_status", "") == "needs_review"]
+        for item in pending[:5]:
+            store.update_item_review(item.memory_id, "rejected")
+        adapter.send_message(chat_id, f"已驳回 {min(len(pending), 5)} 项")
+        logger.info("Reaction rejected: %s → %d items", emoji, min(len(pending), 5))
+        return True
+
+    return False
+
+
 def ws_listen(chat_id: str, project_id: str, data_dir: str,
               adapter, dry_run: bool = False, use_hybrid: bool = False):
     """Real-time WebSocket via lark-cli event +subscribe."""
@@ -258,12 +299,16 @@ def ws_listen(chat_id: str, project_id: str, data_dir: str,
 
     listener = EventStreamListener(
         chat_id=chat_id,
-        event_types="im.message.receive_v1",
+        event_types="im.message.receive_v1,im.message.reaction.created_v1",
         heartbeat_timeout=90,
         reconnect_max_delay=60,
     )
 
     def on_event(event: dict):
+        # V1.18: reaction events first
+        if _handle_reaction(event, data_dir, project_id, chat_id, adapter):
+            return
+
         text = event.get("content", event.get("text", ""))
         msg_id = event.get("message_id", "")
         if not text:
