@@ -18,6 +18,14 @@ from typing import Any
 
 # ── Helpers ────────────────────────────────────────────────────
 
+def _clean_text(text: str) -> str:
+    """Strip HTML-like tags and truncate for safe card rendering."""
+    import re
+    text = re.sub(r"<[^>]+>", "", text)  # remove <card>, <at>, etc.
+    text = text.replace("**", "").replace("###", "").replace("🟢", "")
+    return text.strip()[:200]
+
+
 def _evidence_note(item) -> dict | None:
     ref = item.source_refs[0] if item.source_refs else None
     if not ref:
@@ -49,8 +57,9 @@ def _header(title: str, subtitle: str = "", template: str = "blue") -> dict:
 
 
 def _section(icon: str, title: str, lines: list[str]) -> dict:
+    clean_lines = [_clean_text(l) for l in lines]
     return {"tag": "div", "text": {"tag": "lark_md",
-            "content": f"{icon} **{title}**\n" + "\n".join(f"- {l}" for l in lines)}}
+            "content": f"{icon} **{title}**\n" + "\n".join(f"- {l}" for l in clean_lines)}}
 
 
 def _status_badge(item) -> str:
@@ -109,7 +118,7 @@ def render_handoff_card(
         seen = set()
         lines = []
         for o in owners:
-            v = o.current_value[:60]
+            v = _clean_text(o.current_value)[:60]
             if v in seen or len(v) < 2: continue
             seen.add(v)
             lines.append(v)
@@ -121,7 +130,7 @@ def render_handoff_card(
     if decisions:
         for d in decisions[:5]:
             badge = _status_badge(d)
-            v = d.current_value[:100]
+            v = _clean_text(d.current_value)[:100]
             card["elements"].append({"tag": "div", "text": {"tag": "lark_md",
                 "content": f"{badge} {v}" if badge else f"- {v}"}})
             note = _evidence_note(d)
@@ -133,7 +142,7 @@ def render_handoff_card(
     if blockers:
         for b in blockers[:5]:
             badge = _status_badge(b)
-            v = b.current_value[:100]
+            v = _clean_text(b.current_value)[:100]
             card["elements"].append({"tag": "div", "text": {"tag": "lark_md",
                 "content": f"[!!] {badge} {v}" if badge else f"[!!] {v}"}})
             note = _evidence_note(b)
@@ -150,7 +159,7 @@ def render_handoff_card(
     # Deferred
     deferred = by_type.get("deferred", [])
     if deferred:
-        lines = [d.current_value[:80] for d in deferred[:3]]
+        lines = [_clean_text(d.current_value)[:80] for d in deferred[:3]]
         card["elements"].append(_section("[HOLD]️", "暂缓事项", lines))
         card["elements"].append(_divider())
 
@@ -160,7 +169,7 @@ def render_handoff_card(
         lines = []
         for m in members[:3]:
             sender = m.source_refs[0].sender_name if m.source_refs else "?"
-            lines.append(f"{sender}：{m.current_value[:60]}")
+            lines.append(f"{sender}：{_clean_text(m.current_value)[:60]}")
         card["elements"].append(_section("[USER]", "成员状态", lines))
         card["elements"].append(_divider())
 
@@ -170,7 +179,7 @@ def render_handoff_card(
         seen = set()
         lines = []
         for n in nexts[:5]:
-            v = n.current_value[:80]
+            v = _clean_text(n.current_value)[:80]
             if v in seen: continue
             seen.add(v)
             owner_hint = f" ({n.owner})" if n.owner else ""
@@ -202,7 +211,7 @@ def render_review_card(pending_items: list, project_id: str = "") -> dict:
     )
     for i, item in enumerate(pending_items[:5], 1):
         badge = _status_badge(item)
-        v = item.current_value[:80]
+        v = _clean_text(item.current_value)[:80]
         card["elements"].append({"tag": "div", "text": {"tag": "lark_md",
             "content": f"{i}. [{item.state_type}] {badge} {v}"}})
         note = _evidence_note(item)
@@ -221,13 +230,13 @@ def render_risk_card(blockers: list, deadlines: list, project_id: str = "") -> d
         template="red",
     )
     if deadlines:
-        lines = [d.current_value[:80] for d in deadlines[:3]]
+        lines = [_clean_text(d.current_value)[:80] for d in deadlines[:3]]
         card["elements"].append(_section("[TIME]", "临近截止", lines))
     if blockers:
         card["elements"].append(_divider())
         for b in blockers[:5]:
             badge = _status_badge(b)
-            v = b.current_value[:80]
+            v = _clean_text(b.current_value)[:80]
             card["elements"].append({"tag": "div", "text": {"tag": "lark_md",
                 "content": f"[!!] {badge} {v}"}})
             note = _evidence_note(b)
@@ -249,7 +258,7 @@ def render_standup_card(items: list, project_id: str = "") -> dict:
     card = _header(title="今日站会", subtitle=datetime.now(timezone.utc).strftime("%Y-%m-%d"))
 
     if yesterday:
-        lines = [f"{i.current_value[:60]} [{i.state_type}]" for i in yesterday[:5]]
+        lines = [f"{_clean_text(i.current_value)[:60]} [{i.state_type}]" for i in yesterday[:5]]
         card["elements"].append(_section("[LIST]", "昨日进展", lines))
     else:
         card["elements"].append({"tag": "div", "text": {"tag": "lark_md",
@@ -261,7 +270,7 @@ def render_standup_card(items: list, project_id: str = "") -> dict:
         lines = []
         for t in today[:5]:
             owner = f" ({t.owner})" if t.owner else ""
-            lines.append(f"{t.current_value[:60]}{owner}")
+            lines.append(f"{_clean_text(t.current_value)[:60]}{owner}")
         card["elements"].append(_section("[NEXT]️", "今日计划", lines))
     else:
         card["elements"].append({"tag": "div", "text": {"tag": "lark_md",
@@ -272,7 +281,7 @@ def render_standup_card(items: list, project_id: str = "") -> dict:
         lines = []
         for b in unresolved[:5]:
             badge = _status_badge(b)
-            lines.append(f"{b.current_value[:60]} {badge}".strip())
+            lines.append(f"{_clean_text(b.current_value)[:60]} {badge}".strip())
         card["elements"].append(_section("[!!]", "阻塞与风险", lines))
     else:
         card["elements"].append({"tag": "div", "text": {"tag": "lark_md",
