@@ -901,6 +901,28 @@ class MemoryStore:
                                 if by_key.get(mk) is middle:
                                     del by_key[mk]
 
+            # V1.18: 跨源一致性检查——同主题但不同来源→冲突
+            if old_item is None and new_item.state_type in ("decision", "owner", "deadline", "blocker"):
+                new_source = str(new_item.source_refs[0].type) if new_item.source_refs else ""
+                for existing in list(items):
+                    if existing.state_type != new_item.state_type:
+                        continue
+                    existing_source = str(existing.source_refs[0].type) if existing.source_refs else ""
+                    if new_source and existing_source and new_source != existing_source:
+                        if self._is_same_topic(existing.current_value, new_item.current_value, new_item.state_type):
+                            sim = self._compute_text_similarity(existing.current_value, new_item.current_value)
+                            if sim < 0.7:  # 同主题+不同来源+内容差异→跨源冲突
+                                meta_ex = dict(getattr(existing, "metadata", {}) or {})
+                                meta_new = dict(getattr(new_item, "metadata", {}) or {})
+                                meta_ex["cross_source_conflict"] = True
+                                meta_ex["conflict_sources"] = f"{existing_source} vs {new_source}"
+                                meta_new["cross_source_conflict"] = True
+                                meta_new["conflict_sources"] = f"{existing_source} vs {new_source}"
+                                existing.metadata = meta_ex
+                                existing.review_status = "needs_review"
+                                new_item.metadata = meta_new
+                                new_item.review_status = "needs_review"
+
             # 插入新记忆
             by_key[new_item.identity_key()] = new_item
             items.append(new_item)

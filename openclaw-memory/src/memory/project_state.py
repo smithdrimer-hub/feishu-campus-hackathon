@@ -748,7 +748,12 @@ def render_decision_timeline(active_items: list[MemoryItem],
         rs = getattr(item, "review_status", "")
         cf = meta.get("conflict_status", "")
 
-        if rs == "rejected":
+        # V1.18: 跨源冲突
+        cross_src = meta.get("cross_source_conflict", False)
+        if cross_src:
+            sources = meta.get("conflict_sources", "")
+            status = f"🔀 跨源冲突({sources})"
+        elif rs == "rejected":
             status = "🔒 已驳回"
         elif cf == "conflicting":
             status = "⚡ 冲突中"
