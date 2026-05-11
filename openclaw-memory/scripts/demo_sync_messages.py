@@ -61,6 +61,9 @@ def _extract_message_list(payload: Any) -> list[dict[str, Any]]:
 def _normalize_message(message: dict[str, Any], chat_id: str, project_id: str) -> dict[str, Any]:
     """Normalize one lark-cli message dict into the raw event schema.
 
+    V1.19 P1-A: 通过 MessageParser 解析所有 msg_type，非文本类型生成占位
+    文本 + media_refs，避免静默丢弃。
+
     真实 API 字段:
     - message_id: "om_xxx" (必填)
     - content: 纯文本字符串 或 JSON 字符串 (post 类型)
@@ -70,22 +73,39 @@ def _normalize_message(message: dict[str, Any], chat_id: str, project_id: str) -
     - deleted: bool
     - updated: bool
     """
-    content = _extract_text(message.get("content", ""))
+    raw_content = message.get("content", "")
+    msg_type = str(message.get("msg_type", "text"))
     sender = message.get("sender", {}) or {}
-    return {
+    sender_name = str(sender.get("name", sender.get("id", "")))
+
+    from memory.message_parser import get_parser
+    parsed = get_parser().parse_content(str(raw_content), msg_type, sender_name)
+
+    event: dict[str, Any] = {
         "project_id": project_id,
         "chat_id": chat_id,
         "message_id": str(message.get("message_id") or ""),
-        "text": content,
-        "content": content,
-        "msg_type": str(message.get("msg_type", "text")),
+        "text": parsed.text,
+        "content": parsed.text,
+        "msg_type": msg_type,
         "created_at": str(message.get("create_time") or ""),
         "sender": {
             "id": str(sender.get("id", "")),
             "sender_type": str(sender.get("sender_type", "")),
-            "name": str(sender.get("name", sender.get("id", ""))),
+            "name": sender_name,
         },
     }
+
+    if parsed.media_refs:
+        event["media_refs"] = parsed.media_refs
+    if parsed.has_unsupported_media:
+        event["has_unsupported_media"] = True
+    if parsed.mentions:
+        event["at_list"] = parsed.mentions
+    if parsed.links:
+        event["links"] = parsed.links
+
+    return event
 
 
 def _extract_text(content: Any) -> str:

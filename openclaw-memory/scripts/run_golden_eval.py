@@ -33,33 +33,20 @@ from memory.engine import MemoryEngine
 from memory.extractor import HybridExtractor, LLMExtractor, RuleBasedExtractor
 from memory.llm_provider import OpenAIProvider
 from memory.store import MemoryStore
+from config import get_config
 
 
 def get_llm_provider():
-    """Create OpenAIProvider from config.local.yaml or OPENAI_API_KEY env var.
-
-    优先级：config.local.yaml > 环境变量
-    """
-    config_path = ROOT / "config.local.yaml"
-    if config_path.exists():
-        try:
-            import yaml
-            with open(config_path, encoding="utf-8") as f:
-                config = yaml.safe_load(f)
-            llm_cfg = config.get("llm", {})
-            if llm_cfg.get("provider") == "openai":
-                # api_key 优先于 api_key_env
-                api_key = llm_cfg.get("api_key") or os.environ.get(llm_cfg.get("api_key_env", "OPENAI_API_KEY"), "")
-                if api_key:
-                    return OpenAIProvider(
-                        api_key=api_key,
-                        base_url=llm_cfg.get("base_url"),
-                        model=llm_cfg.get("model", "gpt-4o-mini"),
-                        temperature=llm_cfg.get("temperature", 0.1),
-                        max_tokens=llm_cfg.get("max_tokens", 2000),
-                    )
-        except Exception:
-            pass  # fall through to env var
+    """Create OpenAIProvider from centralized config or OPENAI_API_KEY env var."""
+    cfg = get_config()
+    if cfg.llm.api_key:
+        return OpenAIProvider(
+            api_key=cfg.llm.api_key,
+            base_url=cfg.llm.base_url,
+            model=cfg.llm.model,
+            temperature=cfg.llm.temperature,
+            max_tokens=cfg.llm.max_tokens,
+        )
 
     # Fallback: 环境变量
     if os.environ.get("OPENAI_API_KEY"):

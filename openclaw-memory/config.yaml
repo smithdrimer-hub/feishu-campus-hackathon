@@ -1,0 +1,18 @@
+projects:
+  - chat_id: "oc_e1c6a2c2a42b67606b91ad69bab226f4"
+    project_id: "memory-sandbox"
+    data_dir: "data/auto"
+
+auto_sync:
+  enabled: true
+  time: "09:00"
+  mode: "preview"
+
+event_listener:
+  enabled: true
+  event_types: "im.message.receive_v1"
+  heartbeat_timeout: 90
+  reconnect_max_delay: 60
+
+demo:
+  dry_run: false

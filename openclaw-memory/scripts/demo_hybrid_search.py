@@ -26,24 +26,19 @@ from memory.store import MemoryStore
 
 
 def _load_embedding_provider():
-    """Try to load OpenAI provider from config, fallback to Fake."""
-    config_path = ROOT / "config.local.yaml"
-    if config_path.exists():
-        try:
-            import yaml
-            with open(config_path) as f:
-                config = yaml.safe_load(f) or {}
-            emb_config = config.get("embedding", {})
-            if emb_config and emb_config.get("provider") == "openai":
-                from memory.embedding_provider import OpenAIEmbeddingProvider
-                return OpenAIEmbeddingProvider(
-                    api_key=emb_config.get("api_key"),
-                    api_key_env=emb_config.get("api_key_env", "OPENAI_API_KEY"),
-                    base_url=emb_config.get("base_url"),
-                    model=emb_config.get("model", "text-embedding-3-small"),
-                ), "OpenAI"
-        except Exception as e:
-            print(f"  [注意] 无法加载 OpenAI Embedding: {e}")
+    """Try to load embedding provider from centralized config, fallback to Fake."""
+    try:
+        from config import get_config
+        emb_cfg = get_config().embedding
+        if emb_cfg.api_key:
+            from memory.embedding_provider import OpenAIEmbeddingProvider
+            return OpenAIEmbeddingProvider(
+                api_key=emb_cfg.api_key,
+                base_url=emb_cfg.base_url,
+                model=emb_cfg.model,
+            ), "OpenAI"
+    except Exception as e:
+        print(f"  [注意] 无法加载 OpenAI Embedding: {e}")
 
     return FakeEmbeddingProvider(dimension=128), "Fake (演示用)"
 

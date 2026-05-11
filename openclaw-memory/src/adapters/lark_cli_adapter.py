@@ -23,12 +23,27 @@ class CliResult:
 
 
 class LarkCliAdapter:
-    """Run verified lark-cli commands behind the V1 safety policy."""
+    """Run verified lark-cli commands behind the V1 safety policy.
 
-    def __init__(self, executable: str = "lark-cli.cmd", policy: SafetyPolicy | None = None) -> None:
-        """Create an adapter for a lark-cli executable and safety policy."""
+    V1.19 P0-F: 可选群成员验证 + 凭证检查。
+    """
+
+    def __init__(self, executable: str = "lark-cli.cmd",
+                 policy: SafetyPolicy | None = None,
+                 verify_membership_before_write: bool = False,
+                 bot_open_id: str = "") -> None:
+        """Create an adapter for a lark-cli executable and safety policy.
+
+        Args:
+            executable: lark-cli 可执行文件路径或名称。
+            policy: 安全策略实例。
+            verify_membership_before_write: 如果为 True，发消息/置顶前验证 bot 在群内。
+            bot_open_id: bot 的 open_id，用于群成员验证。
+        """
         self.executable = executable
         self.policy = policy or SafetyPolicy()
+        self._verify_membership = verify_membership_before_write
+        self._bot_open_id = bot_open_id
 
     def resolve_executable(self) -> str:
         """Return the executable path found on PATH or the configured command name."""
@@ -44,31 +59,16 @@ class LarkCliAdapter:
         """Run a lark-cli command after applying the safety policy."""
         safe_args = list(args)
         self.policy.assert_allowed(safe_args, allow_write=allow_write)
-        # V1.12 FIX-5 real: encoding="utf-8" with GBK fallback
-        # 优先 UTF-8 strict，失败时尝试 GBK（Windows lark-cli 可能输出 GBK）
-        try:
-            completed = subprocess.run(
-                [self.resolve_executable(), *safe_args],
-                input=stdin_text,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",  # V1.18: 使用 replace 避免双重执行
-                check=False,
-                timeout=120,
-            )
-        except UnicodeDecodeError:
-            # V1.18: 仅捕获 subprocess 启动阶段的编码错误，不双重执行
-            completed = subprocess.run(
-                [self.resolve_executable(), *safe_args],
-                input=stdin_text,
-                capture_output=True,
-                text=True,
-                encoding="gbk",
-                errors="replace",
-                check=False,
-                timeout=120,
-            )
+        completed = subprocess.run(
+            [self.resolve_executable(), *safe_args],
+            input=stdin_text,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+            timeout=120,
+        )
         return CliResult(
             args=safe_args,
             returncode=completed.returncode,
@@ -198,6 +198,8 @@ class LarkCliAdapter:
             msg_type: "text" or "markdown".
             identity: "bot" (default) or "user".
         """
+        if self._verify_membership:
+            self._check_membership(chat_id)
         if msg_type == "markdown":
             return self.run(
                 ["im", "+messages-send", "--as", identity, "--chat-id", chat_id,
@@ -243,11 +245,17 @@ class LarkCliAdapter:
             args.append("--reply-in-thread")
         return self.run(args, allow_write=True)
 
-    def pin_message(self, message_id: str) -> CliResult:
+    def pin_message(self, message_id: str, chat_id: str = "") -> CliResult:
         """Pin a message in its chat.
 
         Uses the native pins.create API. The chat is inferred from message_id.
+
+        Args:
+            message_id: 要置顶的消息 ID。
+            chat_id: 可选，用于群成员验证（如果启用了 verify_membership_before_write）。
         """
+        if self._verify_membership and chat_id:
+            self._check_membership(chat_id)
         import json
         return self.run(
             ["im", "pins", "create", "--data",
@@ -351,6 +359,18 @@ class LarkCliAdapter:
              "--params", params, "--as", "user"],
         )
 
+    # ── 安全验证 ──────────────────────────────────────────────────
+
+    def _check_membership(self, chat_id: str) -> None:
+        """写入前检查 bot 是否为群成员，不是则抛出 SafetyError。"""
+        from safety.policy import SafetyError
+        if not self._bot_open_id:
+            return  # 没有 bot_open_id 时静默跳过
+        if not self.verify_chat_membership(chat_id, self._bot_open_id):
+            raise SafetyError(
+                f"Bot ({self._bot_open_id}) 不是群 {chat_id} 的成员，拒绝写入操作"
+            )
+
     def verify_chat_membership(self, chat_id: str, open_id: str) -> bool:
         """V1.12: 验证用户是否为群成员 (AUTH-7)。"""
         result = self.list_chat_members(chat_id)
@@ -361,11 +381,14 @@ class LarkCliAdapter:
         return any(m.get("member_id", m.get("open_id", "")) == open_id
                    for m in members)
 
-    def verify_doc_permission(self, doc_id: str, open_id: str) -> bool:
-        """V1.12: 验证用户是否有文档访问权限 (AUTH-8)。
+    def verify_doc_accessible(self, doc_url: str) -> bool:
+        """V1.19 P0-F: 验证 bot 能否访问指定文档。
 
         通过尝试 fetch 文档来判断（有权限则成功，无权限则 API 报错）。
+        注意：此方法仅检查 bot 自身权限，不检查其他用户权限。
+        飞书 CLI 目前不支持按用户粒度查询文档权限。
         """
+        doc_id = _extract_doc_token(doc_url)
         result = self.fetch_doc(doc_id)
         return result.returncode == 0
 
@@ -429,6 +452,24 @@ class LarkCliAdapter:
         return self.run(
             ["calendar", "event.attendees", "list",
              "--params", params, "--as", "user"],
+        )
+
+    # ── V1.19: 资源下载 ────────────────────────────────────────────
+
+    def download_resource(self, message_id: str, file_key: str,
+                          output_path: str, file_type: str = "file") -> CliResult:
+        """V1.19: 下载消息中的文件/图片资源。
+
+        Args:
+            message_id: 消息 ID (om_xxx)。
+            file_key: 文件 key（从消息 content JSON 中提取）。
+            output_path: 输出文件路径。
+            file_type: "file" 或 "image"。
+        """
+        return self.run(
+            ["im", "+resource", "--message-id", message_id,
+             "--file-key", file_key, "--type", file_type,
+             "--output", output_path],
         )
 
     def _parse_json(self, stdout: str) -> Any | None:

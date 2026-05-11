@@ -1,0 +1,33 @@
+# Data — mounted at runtime
+data/
+
+# Config — mounted at runtime
+config.yaml
+config.local.yaml
+
+# Git
+.git/
+.gitignore
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.eggs/
+*.egg-info/
+
+# Tests and evals
+tests/
+examples/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Temp
+*.tmp
+*.swp

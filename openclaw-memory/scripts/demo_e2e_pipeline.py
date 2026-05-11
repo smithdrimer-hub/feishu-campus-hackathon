@@ -87,24 +87,16 @@ def _get_extractor(use_hybrid: bool = False):
 
 
 def _get_llm_provider():
-    """Try to create LLM provider from config."""
-    import os
-    config_path = ROOT / "config.local.yaml"
-    if config_path.exists():
-        try:
-            import yaml
-            with open(config_path, encoding="utf-8") as f:
-                cfg = yaml.safe_load(f)
-            llm_cfg = cfg.get("llm", {})
-            if llm_cfg.get("provider") == "openai" and llm_cfg.get("api_key"):
-                from memory.llm_provider import OpenAIProvider
-                return OpenAIProvider(
-                    api_key=llm_cfg["api_key"],
-                    base_url=llm_cfg.get("base_url"),
-                    model=llm_cfg.get("model", "gpt-4o-mini"),
-                )
-        except Exception:
-            pass
+    """Try to create LLM provider from centralized config."""
+    from config import get_config
+    cfg = get_config()
+    if cfg.llm.api_key:
+        from memory.llm_provider import OpenAIProvider
+        return OpenAIProvider(
+            api_key=cfg.llm.api_key,
+            base_url=cfg.llm.base_url,
+            model=cfg.llm.model,
+        )
     return None
 
 
@@ -501,23 +493,46 @@ def _is_collaboration_message(msg: dict) -> bool:
 
 
 def _normalize_event(msg: dict, chat_id: str, project_id: str) -> dict[str, Any]:
-    """Normalize one lark-cli message dict into a raw event dict."""
-    content = _extract_text(msg.get("content", ""))
+    """Normalize one lark-cli message dict into a raw event dict.
+
+    V1.19 P1-A: 通过 MessageParser 解析所有 msg_type，非文本类型生成占位
+    文本 + media_refs，避免静默丢弃。
+    """
+    raw_content = msg.get("content", "")
+    msg_type = str(msg.get("msg_type", "text"))
     sender = msg.get("sender", {}) or {}
-    return {
+    sender_name = str(sender.get("name", sender.get("id", "")))
+
+    from memory.message_parser import get_parser
+    parsed = get_parser().parse_content(str(raw_content), msg_type, sender_name)
+
+    event: dict[str, Any] = {
         "project_id": project_id,
         "chat_id": chat_id,
         "message_id": str(msg.get("message_id") or ""),
-        "text": content,
-        "content": content,
-        "msg_type": str(msg.get("msg_type", "text")),
+        "text": parsed.text,
+        "content": parsed.text,  # content 与 text 保持一致，供提取器使用
+        "msg_type": msg_type,
         "created_at": str(msg.get("create_time") or ""),
         "sender": {
             "id": str(sender.get("id", "")),
             "sender_type": str(sender.get("sender_type", "")),
-            "name": str(sender.get("name", sender.get("id", ""))),
+            "name": sender_name,
         },
     }
+
+    # 非文本证据附加到事件中，供 SourceRef 使用
+    if parsed.media_refs:
+        event["media_refs"] = parsed.media_refs
+    if parsed.has_unsupported_media:
+        event["has_unsupported_media"] = True
+    # V1.19 P1-D: post 结构化数据 → extractor._extract_mentions() 可直接消费
+    if parsed.mentions:
+        event["at_list"] = parsed.mentions
+    if parsed.links:
+        event["links"] = parsed.links
+
+    return event
 
 
 def _extract_text(content: Any) -> str:

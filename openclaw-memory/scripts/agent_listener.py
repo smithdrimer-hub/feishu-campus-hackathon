@@ -32,6 +32,7 @@ sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from adapters.event_listener import EventStreamListener, EventRouter
+from config import get_config
 from memory.engine import MemoryEngine
 from memory.extractor import HybridExtractor, LLMExtractor, RuleBasedExtractor
 from memory.llm_provider import OpenAIProvider
@@ -43,10 +44,6 @@ DEFAULT_CHAT_ID = "oc_e1c6a2c2a42b67606b91ad69bab226f4"
 DEFAULT_PROJECT = "natural-daily"
 DEFAULT_DATA_DIR = "data/agent_demo"
 DEFAULT_BOOTSTRAP_CACHE = "/tmp/full_loop_events.json"
-
-DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "sk-e71397d04b974b02a84b3f02b4b0302e")
-DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
-DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
 
 # 30s per chat cooldown — protect against accidental spam / fast typers
 TRIGGER_COOLDOWN_SEC = 30
@@ -158,8 +155,10 @@ def bootstrap_memory(
         for ev in events:
             ev["project_id"] = project_id
         provider = OpenAIProvider(
-            api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL,
-            model=DEEPSEEK_MODEL, temperature=0.1, max_tokens=4000,
+            api_key=get_config().llm.api_key,
+            base_url=get_config().llm.base_url,
+            model=get_config().llm.model,
+            temperature=0.1, max_tokens=4000,
         )
         rule = RuleBasedExtractor()
         hybrid = HybridExtractor(

@@ -103,15 +103,21 @@ class TestAdapterEncoding(unittest.TestCase):
         self.assertIn('encoding="utf-8"', source)
         self.assertIn('timeout=120', source)  # V1.18: 超时保护
 
-    def test_run_has_gbk_fallback(self):
-        """adapter.run 应有 GBK 回退（UnicodeDecodeError → GBK）。"""
+    def test_run_no_double_execution(self):
+        """V1.19 P0-B: adapter.run 使用 errors='replace' 避免双重执行，无 GBK 回退。
+
+        UTF-8 + errors='replace' 已确保不会触发 UnicodeDecodeError，
+        GBK 回退（会导致写操作双重执行）已被移除。
+        """
         from adapters.lark_cli_adapter import LarkCliAdapter
         import inspect
         source = inspect.getsource(LarkCliAdapter.run)
-        self.assertIn('UnicodeDecodeError', source,
-                      "should catch UnicodeDecodeError for GBK fallback")
-        self.assertIn('encoding="gbk"', source,
-                      "should fall back to GBK encoding")
+        self.assertIn('encoding="utf-8"', source)
+        self.assertIn('errors="replace"', source)
+        self.assertNotIn('UnicodeDecodeError', source,
+                         "GBK fallback that causes double execution should be removed")
+        self.assertNotIn('encoding="gbk"', source,
+                         "GBK fallback that causes double execution should be removed")
 
 
 class TestSafetyBypassScenarios(unittest.TestCase):

@@ -1,0 +1,22 @@
+version: "3.8"
+
+services:
+  memory-engine:
+    build: .
+    container_name: openclaw-memory
+    restart: unless-stopped
+    volumes:
+      # 配置文件（含 API 密钥）
+      - ./config.local.yaml:/app/config.local.yaml:ro
+      - ./config.yaml:/app/config.yaml:ro
+      # 数据持久化
+      - ./data:/app/data
+      # lark-cli 认证状态（宿主机已登录后挂载）
+      - ~/.lark-cli:/root/.lark-cli:ro
+    environment:
+      - OPENCLAW_LLM_API_KEY=${OPENCLAW_LLM_API_KEY:-}
+      - OPENCLAW_EMBEDDING_API_KEY=${OPENCLAW_EMBEDDING_API_KEY:-}
+    # WebSocket 长连接模式
+    command: ["--mode", "auto"]
+    # 或使用 polling 模式：
+    # command: ["--mode", "poll", "--interval", "10"]

@@ -162,5 +162,167 @@ class TestMemoryStoreStability(unittest.TestCase):
             self.assertEqual(len(entries), 1)  # malformed line skipped
 
 
+class TestLifecycleStability(unittest.TestCase):
+    """V1.19 P0-C: 记忆生命周期回归测试。"""
+
+    def setUp(self):
+        from memory.store import MemoryStore
+        from tempfile import TemporaryDirectory
+        self.tmp = TemporaryDirectory()
+        self.store = MemoryStore(self.tmp.name)
+        self.store.ensure_files()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _make_item(self, state_type, value, owner="张三",
+                   decision_strength="", confidence=0.8,
+                   review_status="", **kwargs):
+        from memory.schema import MemoryItem, source_ref_from_event
+        ev = {"project_id": "p", "chat_id": "c", "message_id": f"m_{value[:8]}",
+              "text": value, "created_at": "2026-05-01T00:00:00"}
+        return MemoryItem("p", state_type, value[:20], value, value,
+                          owner, "active", confidence,
+                          [source_ref_from_event(ev)],
+                          decision_strength=decision_strength,
+                          review_status=review_status,
+                          **kwargs)
+
+    # ── 锚点记忆保护 ──
+
+    def test_confirmed_decision_not_expired(self):
+        """confirmed 决策不因时间自动过期（锚点保护）。"""
+        item = self._make_item("decision", "用Python做后端",
+                               decision_strength="confirmed", confidence=0.9)
+        self.store.upsert_items([item], [])
+        swept = self.store.sweep_expired()
+        self.assertEqual(swept, 0)
+        active = self.store.list_items("p")
+        self.assertEqual(len(active), 1)
+        self.assertEqual(active[0].status, "active")
+
+    def test_project_goal_not_expired(self):
+        """project_goal 不因时间自动过期（锚点保护）。"""
+        item = self._make_item("project_goal", "完成记忆引擎V2",
+                               confidence=0.9, decision_strength="confirmed")
+        self.store.upsert_items([item], [])
+        swept = self.store.sweep_expired()
+        self.assertEqual(swept, 0)
+        active = self.store.list_items("p")
+        self.assertEqual(len(active), 1)
+
+    def test_member_status_not_expired(self):
+        """member_status 不因时间自动过期。"""
+        item = self._make_item("member_status", "张三请假3天",
+                               confidence=0.9)
+        self.store.upsert_items([item], [])
+        swept = self.store.sweep_expired()
+        self.assertEqual(swept, 0)
+
+    # ── confidence 加权 ──
+
+    def test_low_confidence_marks_needs_review_not_expired(self):
+        """低置信度（<0.5）标 needs_review，不直接 expired。"""
+        item = self._make_item("next_step", "补充单元测试",
+                               confidence=0.3)
+        # 人工设置 recorded_at 为很久以前，确保触发 TTL
+        item.recorded_at = "2025-01-01T00:00:00"
+        self.store.upsert_items([item], [])
+        self.store.sweep_expired()
+        active = self.store.list_items("p")
+        self.assertEqual(len(active), 1)
+        self.assertEqual(active[0].review_status, "needs_review",
+                         "低置信度应标 needs_review 而非 expired")
+
+    def test_high_confidence_slower_expiry_needs_review(self):
+        """高置信度（>=0.8）到期标 needs_review，不直接 expired。"""
+        item = self._make_item("next_step", "发布v2.0版本",
+                               confidence=0.9)
+        item.recorded_at = "2025-01-01T00:00:00"
+        self.store.upsert_items([item], [])
+        self.store.sweep_expired()
+        active = self.store.list_items("p")
+        self.assertEqual(len(active), 1)
+        self.assertEqual(active[0].review_status, "needs_review",
+                         "高置信度到期也应标 needs_review 而非直接 expired")
+
+    def test_mid_confidence_can_expire(self):
+        """中等置信度（0.5-0.8）可直接 expired。"""
+        item = self._make_item("next_step", "旧任务已过期",
+                               confidence=0.6)
+        item.recorded_at = "2025-01-01T00:00:00"
+        self.store.upsert_items([item], [])
+        swept = self.store.sweep_expired()
+        self.assertGreater(swept, 0, "中等置信度超期应可直接 expired")
+        active = self.store.list_items("p")
+        self.assertEqual(len(active), 0)
+
+    # ── 召回过滤 ──
+
+    def test_forgotten_not_in_list_items(self):
+        """forgotten 记忆默认不被 list_items 返回。"""
+        item = self._make_item("owner", "张三负责前端")
+        self.store.upsert_items([item], [])
+        self.store.forget_item(item.memory_id, "测试遗忘")
+        active = self.store.list_items("p")
+        self.assertEqual(len(active), 0)
+
+    def test_corrected_not_in_list_items(self):
+        """corrected 记忆默认不被 list_items 返回。"""
+        item = self._make_item("decision", "用Java")
+        self.store.upsert_items([item], [])
+        self.store.correct_item(item.memory_id, "用Python", "纠正测试")
+        active = self.store.list_items("p")
+        self.assertEqual(len(active), 1)
+        self.assertEqual(active[0].current_value, "用Python")
+
+    def test_include_expired_returns_expired(self):
+        """include_expired=True 可查回过期记忆。"""
+        item = self._make_item("next_step", "过期任务", confidence=0.6)
+        item.recorded_at = "2025-01-01T00:00:00"
+        self.store.upsert_items([item], [])
+        self.store.sweep_expired()
+        all_items = self.store.list_items("p", include_expired=True)
+        self.assertGreater(len(all_items), 0)
+
+    # ── correct_item 双向关联 ──
+
+    def test_correct_item_bidirectional_linking(self):
+        """correct 后新旧 item 有双向关联。"""
+        item = self._make_item("owner", "张三负责API")
+        self.store.upsert_items([item], [])
+        new_item = self.store.correct_item(item.memory_id, "李四负责API", "换人")
+        self.assertIsNotNone(new_item)
+
+        # 新条目 → supersedes 旧条目
+        self.assertIn(item.memory_id, new_item.supersedes)
+
+        # 新条目 metadata 记录 corrects_item_id
+        self.assertEqual(
+            new_item.metadata.get("corrects_item_id"), item.memory_id)
+
+        # 旧条目在 history 中，metadata 记录 corrected_by_item_id
+        history = self.store.list_history("p")
+        old_in_history = [h for h in history if h.memory_id == item.memory_id]
+        self.assertEqual(len(old_in_history), 1)
+        self.assertEqual(
+            old_in_history[0].metadata.get("corrected_by_item_id"),
+            new_item.memory_id)
+
+    # ── upsert 不误伤 ──
+
+    def test_same_content_no_superseded(self):
+        """重复 upsert 相同内容不应产生 superseded。"""
+        item1 = self._make_item("decision", "用Python做后端",
+                                decision_strength="confirmed")
+        item2 = self._make_item("decision", "用Python做后端",
+                                decision_strength="confirmed")
+        self.store.upsert_items([item1], [])
+        self.store.upsert_items([item2], [])
+        history = self.store.list_history("p")
+        self.assertEqual(len(history), 0,
+                         "相同内容 upsert 不应产生 superseded 历史")
+
+
 if __name__ == "__main__":
     unittest.main()

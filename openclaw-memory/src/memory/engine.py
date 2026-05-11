@@ -136,6 +136,9 @@ class MemoryEngine:
 
         self._set_last_process_time(project_id, datetime.now())
 
+        # V1.19: 每次处理完新事件后执行轻量维护
+        self.store.maintenance()
+
         return result
 
     def sync_doc(self, doc_id: str, project_id: str | None = None) -> list[MemoryItem]:

@@ -342,15 +342,14 @@ def main() -> None:
     vs = None
     if args.vector_search:
         try:
-            import yaml
-            cfg = yaml.safe_load((ROOT / "config.local.yaml").read_text(encoding="utf-8"))
-            emb_cfg = cfg.get("embedding", {})
+            from config import get_config
+            emb_cfg = get_config().embedding
             from memory.embedding_provider import OpenAIEmbeddingProvider
             from memory.vector_store import VectorStore
             emb = OpenAIEmbeddingProvider(
-                api_key=emb_cfg.get("api_key", ""),
-                base_url=emb_cfg.get("base_url", ""),
-                model=emb_cfg.get("model", ""),
+                api_key=emb_cfg.api_key,
+                base_url=emb_cfg.base_url,
+                model=emb_cfg.model,
             )
             vs = VectorStore(str(data_dir / "chroma"), emb)
             print(f"  Vector store: {vs.stats().get('memories', 0)} items indexed")

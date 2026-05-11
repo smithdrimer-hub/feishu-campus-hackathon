@@ -14,11 +14,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import subprocess
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger("session")
 
 
 @dataclass
@@ -56,12 +60,18 @@ class UserSession:
 
     从 lark-cli 的 doctor 命令和 config.json 中读取用户信息。
     支持多用户配置文件持久化。
+
+    V1.19 P0-F: 增加 TTL 缓存 + 错误日志 + is_session_valid()。
     """
 
-    def __init__(self, data_dir: str | Path = "data") -> None:
+    DEFAULT_TTL_SECONDS = 300  # 5 分钟缓存
+
+    def __init__(self, data_dir: str | Path = "data", ttl_seconds: int | None = None) -> None:
         self._data_dir = Path(data_dir)
         self._profiles_path = self._data_dir / "user_profiles.json"
         self._current: UserProfile = UserProfile()
+        self._last_refreshed_at: float = 0.0
+        self._ttl: int = ttl_seconds if ttl_seconds is not None else self.DEFAULT_TTL_SECONDS
 
     # ── 公开 API ────────────────────────────────────────────────
 
@@ -79,10 +89,31 @@ class UserSession:
 
     def is_authenticated(self) -> bool:
         """当前是否有有效的用户会话。"""
-        return bool(self._current.open_id)
+        return bool(self._current.open_id) and self._current.is_active
 
-    def refresh(self) -> UserProfile:
-        """从 lark-cli doctor 刷新当前用户信息。"""
+    def is_session_valid(self) -> bool:
+        """检查会话是否在 TTL 内且 token 有效。
+
+        如果 TTL 已过期，不清除状态——由调用方决定是否 refresh()。
+        """
+        if not self.is_authenticated():
+            return False
+        elapsed = time.monotonic() - self._last_refreshed_at
+        return elapsed < self._ttl
+
+    def seconds_until_expiry(self) -> float:
+        """距离 TTL 过期还剩多少秒。负数表示已过期。"""
+        return self._ttl - (time.monotonic() - self._last_refreshed_at)
+
+    def refresh(self, force: bool = False) -> UserProfile:
+        """从 lark-cli doctor 刷新当前用户信息。
+
+        Args:
+            force: 如果为 True，跳过 TTL 缓存强制刷新。
+        """
+        if not force and self.is_session_valid():
+            return self._current
+
         try:
             result = subprocess.run(
                 ["lark-cli.cmd", "doctor"],
@@ -90,6 +121,8 @@ class UserSession:
                 errors="replace", check=False, timeout=15,
             )
             if result.returncode != 0:
+                logger.warning("lark-cli doctor 返回非零: rc=%d stderr=%s",
+                              result.returncode, result.stderr[:200])
                 return self._current
 
             data = json.loads(result.stdout)
@@ -110,10 +143,20 @@ class UserSession:
                 elif name == "token_verified":
                     self._current.is_active = "valid" in msg.lower()
 
+            self._last_refreshed_at = time.monotonic()
+
             if self._current.open_id:
                 self._save_profile()
-        except (json.JSONDecodeError, subprocess.TimeoutExpired, OSError):
-            pass
+            else:
+                logger.warning("lark-cli doctor 未返回 open_id，token 可能已过期")
+
+        except json.JSONDecodeError:
+            logger.warning("lark-cli doctor 返回了非 JSON 输出，会话可能不可用")
+        except subprocess.TimeoutExpired:
+            logger.warning("lark-cli doctor 超时（15s），网络或 lark-cli 可能异常")
+        except OSError as e:
+            logger.warning("无法执行 lark-cli.cmd: %s", e)
+
         return self._current
 
     def list_users(self) -> list[UserProfile]:
@@ -132,6 +175,7 @@ class UserSession:
                 found = True
         if found:
             self._save_profiles_raw(profiles)
+            self._last_refreshed_at = 0.0  # 切换用户后强制下次 refresh
         return found
 
     # ── 内部 ────────────────────────────────────────────────────

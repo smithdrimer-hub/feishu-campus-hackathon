@@ -19,8 +19,16 @@ from memory.schema import MemoryItem
 from memory.store import MemoryStore
 
 
+class PermissionError(RuntimeError):
+    """无权访问指定用户的数据。"""
+    pass
+
+
 class MultiUserStore:
-    """按 open_id 分片的记忆存储，自动路由到活跃用户的数据目录。"""
+    """按 open_id 分片的记忆存储，自动路由到活跃用户的数据目录。
+
+    V1.19 P0-F: get_store_for() 增加授权检查。
+    """
 
     def __init__(self, session, base_dir: str | Path = "data") -> None:
         """创建多用户存储。
@@ -48,13 +56,89 @@ class MultiUserStore:
             self._stores[uid] = MemoryStore(user_dir)
         return self._stores[uid]
 
-    def get_store_for(self, open_id: str) -> MemoryStore:
-        """获取指定用户的数据存储（仅用于管理员操作）。"""
+    def get_store_for(self, open_id: str, requester_open_id: str | None = None) -> MemoryStore:
+        """获取指定用户的数据存储。
+
+        需要授权：requester 必须为目标用户本人或管理员。
+        如果 requester_open_id 为 None（向后兼容），跳过检查。
+
+        Raises:
+            PermissionError: 无权访问目标用户的数据。
+        """
+        if requester_open_id is not None:
+            if requester_open_id != open_id and not self._is_admin(requester_open_id):
+                raise PermissionError(
+                    f"无权访问其他用户的数据 (requester={requester_open_id}, target={open_id})"
+                )
+
         if open_id not in self._stores:
             self._stores[open_id] = MemoryStore(
                 self._base_dir / "users" / open_id,
             )
         return self._stores[open_id]
+
+    # ── 委托 ────────────────────────────────────────────────────
+
+    def list_items(self, project_id: str | None = None,
+                   as_of: str | None = None) -> list[MemoryItem]:
+        return self.current_store.list_items(project_id, as_of=as_of)
+
+    def list_history(self, project_id: str | None = None) -> list[MemoryItem]:
+        return self.current_store.list_history(project_id)
+
+    def search_keywords(self, query: str, project_id: str | None = None,
+                        as_of: str | None = None,
+                        top_k: int = 10) -> list:
+        return self.current_store.search_keywords(
+            query, project_id=project_id, as_of=as_of, top_k=top_k,
+        )
+
+    def search_advanced(self, **kwargs) -> list:
+        return self.current_store.search_advanced(**kwargs)
+
+    def find_items_by_message_id(self, message_id: str) -> list[MemoryItem]:
+        return self.current_store.find_items_by_message_id(message_id)
+
+    def upsert_items(self, new_items, processed_ids=()):
+        return self.current_store.upsert_items(new_items, processed_ids)
+
+    def append_raw_events(self, events) -> int:
+        return self.current_store.append_raw_events(events)
+
+    def read_raw_events(self, project_id: str | None = None) -> list[dict]:
+        return self.current_store.read_raw_events(project_id)
+
+    def processed_event_ids(self) -> list[str]:
+        return self.current_store.processed_event_ids()
+
+    def mark_processed(self, event_ids) -> None:
+        self.current_store.mark_processed(event_ids)
+
+    def build_inverted_index(self):
+        return self.current_store.build_inverted_index()
+
+    # ── 管理 ────────────────────────────────────────────────────
+
+    def list_all_user_ids(self) -> list[str]:
+        """列出所有已有数据的用户 ID。"""
+        users_dir = self._base_dir / "users"
+        if not users_dir.exists():
+            return []
+        return [
+            d.name for d in users_dir.iterdir()
+            if d.is_dir() and (d / "memory_state.json").exists()
+        ]
+
+    # ── 内部 ────────────────────────────────────────────────────
+
+    @staticmethod
+    def _is_admin(open_id: str) -> bool:
+        """检查 open_id 是否在管理员列表中。"""
+        try:
+            from config import get_config
+            return open_id in get_config().auth.admins
+        except Exception:
+            return False
 
     # ── 委托 ────────────────────────────────────────────────────
 

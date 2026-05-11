@@ -26,21 +26,17 @@ from memory.store import MemoryStore
 
 def get_provider():
     """尝试创建 LLM provider，失败则用 FakeLLMProvider."""
-    config_path = ROOT / "config.local.yaml"
-    if config_path.exists():
-        try:
-            import yaml
-            with open(config_path, encoding="utf-8") as f:
-                cfg = yaml.safe_load(f)
-            llm_cfg = cfg.get("llm", {})
-            if llm_cfg.get("provider") == "openai" and llm_cfg.get("api_key"):
-                return OpenAIProvider(
-                    api_key=llm_cfg["api_key"],
-                    base_url=llm_cfg.get("base_url"),
-                    model=llm_cfg.get("model", "gpt-4o-mini"),
-                )
-        except Exception:
-            pass
+    try:
+        from config import get_config
+        llm_cfg = get_config().llm
+        if llm_cfg.api_key:
+            return OpenAIProvider(
+                api_key=llm_cfg.api_key,
+                base_url=llm_cfg.base_url,
+                model=llm_cfg.model,
+            )
+    except Exception:
+        pass
     return FakeLLMProvider()
 
 

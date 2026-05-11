@@ -87,23 +87,19 @@ def main() -> None:
     # ── Hybrid ──
     if args.mode in ("hybrid", "all"):
         provider = None
-        config_path = ROOT / "config.local.yaml"
-        if config_path.exists():
-            try:
-                import yaml
-                with open(config_path, encoding="utf-8") as f:
-                    cfg = yaml.safe_load(f) or {}
-                llm_cfg = cfg.get("llm", {})
-                if llm_cfg.get("api_key"):
-                    from memory.llm_provider import OpenAIProvider
-                    provider = OpenAIProvider(
-                        api_key=llm_cfg["api_key"],
-                        base_url=llm_cfg.get("base_url"),
-                        model=llm_cfg.get("model", "gpt-4o-mini"),
-                        temperature=llm_cfg.get("temperature", 0),
-                    )
-            except Exception:
-                pass
+        try:
+            from config import get_config
+            llm_cfg = get_config().llm
+            if llm_cfg.api_key:
+                from memory.llm_provider import OpenAIProvider
+                provider = OpenAIProvider(
+                    api_key=llm_cfg.api_key,
+                    base_url=llm_cfg.base_url,
+                    model=llm_cfg.model,
+                    temperature=llm_cfg.temperature,
+                )
+        except Exception:
+            pass
 
         if provider is None:
             print("[WARN] LLM 未配置，Hybrid 降级为纯规则模式")

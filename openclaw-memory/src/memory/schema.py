@@ -23,6 +23,7 @@ class SourceRef:
     """Evidence anchor pointing back to the original Feishu message.
 
     V1.12: 新增 sender_name/sender_id/source_url 完善证据链。
+    V1.19 P1-A: 新增 media_refs 记录非文本消息的元数据证据。
     """
 
     type: str
@@ -33,15 +34,21 @@ class SourceRef:
     sender_name: str = ""
     sender_id: str = ""
     source_url: str = ""
+    media_refs: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize this source reference into a JSON-compatible dict."""
-        return asdict(self)
+        result = asdict(self)
+        # 空列表不写入，减小文件体积
+        if not self.media_refs:
+            result.pop("media_refs", None)
+        return result
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "SourceRef":
         """Create a SourceRef from a JSON-compatible dict.
         V1.12: 向后兼容旧数据（缺失字段默认为空字符串）。
+        V1.19: media_refs 向后兼容。
         """
         return cls(
             type=str(data.get("type", "message")),
@@ -52,6 +59,7 @@ class SourceRef:
             sender_name=str(data.get("sender_name", "")),
             sender_id=str(data.get("sender_id", "")),
             source_url=str(data.get("source_url", "")),
+            media_refs=list(data.get("media_refs", [])),
         )
 
 
@@ -83,6 +91,10 @@ class MemoryItem:
     decision_strength: str = ""  # discussion | preference | tentative | confirmed
     review_status: str = ""      # auto_approved | needs_review | approved | rejected
     metadata: dict[str, Any] = field(default_factory=dict)  # 扩展字段（blocker_status 等）
+    # V1.19 P0-C: 生命周期状态追踪
+    status_reason: str = ""         # 状态变更原因（如 "用户纠正: 负责人实际是李四"）
+    status_changed_at: str = ""     # 状态变更时间（ISO）
+    status_changed_by: str = ""     # 状态变更人（open_id 或 "system"）
 
     def identity_key(self) -> str:
         """Return the stable key used to decide whether this item supersedes another."""
@@ -98,6 +110,7 @@ class MemoryItem:
     def from_dict(cls, data: dict[str, Any]) -> "MemoryItem":
         """Create a MemoryItem from a JSON-compatible dict.
         V1.6: 旧数据缺少 valid_from/valid_to/recorded_at 时兼容加载。
+        V1.19 P0-C: status_reason/status_changed_at/status_changed_by 向后兼容。
         """
         refs = [SourceRef.from_dict(ref) for ref in data.get("source_refs", [])
                 if isinstance(ref, dict)]  # V1.18: 防御损坏数据
@@ -122,6 +135,9 @@ class MemoryItem:
             decision_strength=str(data.get("decision_strength", "")),
             review_status=str(data.get("review_status", "")),
             metadata=dict(data.get("metadata", {}) or {}),
+            status_reason=str(data.get("status_reason", "")),
+            status_changed_at=str(data.get("status_changed_at", "")),
+            status_changed_by=str(data.get("status_changed_by", "")),
         )
 
 
@@ -158,6 +174,7 @@ def source_ref_from_event(event: dict[str, Any], excerpt: str | None = None) -> 
         sender_name=str(sender.get("name", sender.get("id", ""))),
         sender_id=str(sender.get("id", "")),
         source_url=source_url,
+        media_refs=list(event.get("media_refs", [])),
     )
 
 

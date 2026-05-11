@@ -104,32 +104,61 @@ class EventStreamListener:
         self._last_event_time = time.time()
 
     def _read_events(self) -> None:
-        """Read NDJSON from subprocess stdout, one line per event."""
+        """Read NDJSON from subprocess stdout, one line per event.
+
+        V1.19: 心跳监护——后台线程定期检查 _check_heartbeat()，
+        超时时终止子进程，触发外层重连。
+        """
         assert self._process and self._process.stdout
-        for line in self._process.stdout:
-            if not self._running:
-                break
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            self._last_event_time = time.time()
-            self._retry_count = 0  # reset on successful event
 
-            # Filter by chat_id（reaction 事件无 chat_id，不筛选）
-            ev_chat = event.get("chat_id", "")
-            ev_type = event.get("type", event.get("event_type", ""))
-            if self.chat_id and ev_chat and ev_chat != self.chat_id:
-                continue
+        # 启动心跳监护线程
+        heartbeat_stop = threading.Event()
 
-            if self.on_event:
+        def _heartbeat_watchdog() -> None:
+            check_interval = max(self.heartbeat_timeout / 3, 10.0)
+            while not heartbeat_stop.is_set():
+                time.sleep(check_interval)
+                if heartbeat_stop.is_set():
+                    return
+                if not self._check_heartbeat():
+                    logger.warning(
+                        "Heartbeat lost (%.0fs since last event), restarting subprocess",
+                        time.time() - self._last_event_time,
+                    )
+                    if self._process and self._process.poll() is None:
+                        self._process.terminate()
+                    return
+
+        watchdog = threading.Thread(target=_heartbeat_watchdog, daemon=True)
+        watchdog.start()
+
+        try:
+            for line in self._process.stdout:
+                if not self._running:
+                    break
+                line = line.strip()
+                if not line:
+                    continue
                 try:
-                    self.on_event(event)
-                except Exception as e:
-                    logger.warning("Event handler error: %s", e)
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                self._last_event_time = time.time()
+                self._retry_count = 0  # reset on successful event
+
+                # Filter by chat_id（reaction 事件无 chat_id，不筛选）
+                ev_chat = event.get("chat_id", "")
+                ev_type = event.get("type", event.get("event_type", ""))
+                if self.chat_id and ev_chat and ev_chat != self.chat_id:
+                    continue
+
+                if self.on_event:
+                    try:
+                        self.on_event(event)
+                    except Exception as e:
+                        logger.warning("Event handler error: %s", e)
+        finally:
+            heartbeat_stop.set()
 
     def _reconnect(self) -> None:
         """Exponential backoff reconnect."""

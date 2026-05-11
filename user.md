@@ -1,42 +1,184 @@
-建议把跨源一致性检查放在“记忆写入/更新层”，不要放在提取层频繁打断用户。提取层只生成 candidate memory，写入层再判断它与 existing/confirmed memory 的关系。
+是的，可以重新考虑，而且你的判断有道理。既然你\*\*已经能建立长连接\*\*，项目的性质就变了：它不再只是“读取历史群聊 → 生成记忆”的离线工具，而是可以变成“飞书协作信息实时进入记忆引擎 → 维护状态 → 支持中断续办/交接/追问”的实时闭环系统。
 
-核心策略：
 
-新信息不应自动覆盖旧记忆。
-只有当新消息明确包含“改为、取消、以新方案为准、延期到、负责人换成”等变更语义时，才将旧记忆标记为 superseded，并写入新 active memory。
 
-如果新信息与旧记忆冲突，但没有明确变更语义，应标记为 conflict，进入待确认队列，而不是直接更新。例如群聊说“下周再做”，但任务 DDL 仍是周五，系统应提示“疑似计划变更”，等待确认。
+结合评分标准，我会把优先级重新调整成这样：
 
-主动询问只用于高影响冲突：DDL、owner、任务完成状态、关键决策、正式周报/交接包内容。普通状态差异可批量展示，避免频繁打扰办公流程。
 
-建议加入来源权重：任务系统更适合判断任务状态，会议纪要更适合判断正式决策，文档更适合判断方案内容，群聊更适合捕捉即时变化但权威性较低。
 
-最终原则：**默认不打断，关键冲突才询问；默认不覆盖，明确变更才更新。**
-我看下来，主流开源项目大概有四种做法，但它们大多是面向“个人 Agent 记忆”，不是企业协作记忆，所以对“计划变更是否需要确认”处理得不如你这个场景细。
+\*\*第一优先级：实时闭环稳定性，而不是非文本消息解析。\*\*
 
-**1. Mem0：偏向 update / ADD-only，而不是复杂冲突治理。**
-Mem0 有显式 `update` 操作，用 memory_id 修改已有记忆，用于用户偏好变化、事实澄清、补充 metadata 等；它强调“修正或丰富已有 memory”，不是直接 delete+add。新版 OSS 算法又转向 single-pass ADD-only extraction，抽取阶段只 ADD，不做 UPDATE/DELETE，再靠检索、实体链接和后续机制处理记忆使用。这个思路适合降低抽取复杂度，但企业协作里如果只 ADD，很容易留下多个冲突状态。([docs.mem0.ai][1])
 
-**2. Graphiti / Zep：最接近你的需求，用时间有效性处理变更。**
-Graphiti 是 temporal knowledge graph，会记录事实随时间变化，并维护 provenance；边上有 `valid_at` / `invalid_at`，新事实使旧事实失效时，不删除旧事实，而是标记旧事实失效，保留历史。这个非常适合你们的 Decision Timeline 和跨源一致性：旧计划不要覆盖掉，而是变成“曾经有效、后来失效”。([help.getzep.com][2])
 
-**3. LangMem：让 memory manager 做“创建、合并、更新、失效”的平衡。**
-LangMem 明确提到 collection memory 的难点是要把新信息和旧 belief reconciliate，可能需要删除/失效、更新/整合；它提供后台 memory manager 自动抽取、consolidate、update agent knowledge。这个方向比较通用，但具体冲突规则主要靠开发者指令和系统设计，不是天然适配企业审批。([langchain-ai.github.io][3])
+评分里“完整性 \& 价值”占 40 分，里面明确看流程是否完整闭环、能否落地、Demo 是否稳定。你现在已经有长连接，所以最值得做的是把它包装成一个稳定的实时 pipeline：
 
-**4. Letta / MemGPT：让 Agent 自己编辑核心记忆。**
-Letta 把记忆分成 Core Memory、Recall Memory、Archival Memory；Core Memory 是可编辑 block，Agent 可以用 `core_memory_append` 和 `core_memory_replace` 更新。这个更像“自治 Agent 自己维护上下文”，适合个人助手，但放到企业协作里风险偏高，因为它默认更信任 Agent 自主改写。([letta.com][4])
 
-对你们项目最有参考价值的是 **Graphiti 的 temporal validity + LangMem 的 consolidation**，但要加企业场景的审核机制。也就是：
 
-新信息不要直接覆盖旧记忆；旧记忆保留 `valid_from / valid_to / superseded_by`。
-明确变更语义时，旧记忆自动失效，新记忆生效。
-没有明确变更语义但冲突时，生成 conflict record，进入待确认队列。
-高影响字段，比如 DDL、owner、任务完成状态、关键决策，才主动询问。
+飞书群聊消息进入 → 标准化事件 → 抽取记忆 → 写入 MemoryStore → 生命周期维护 → 可召回/可交接/可审计。
 
-一句话：**开源项目大多解决“记忆如何更新”，但你们要解决的是“团队协作事实能否被安全更新”。** 这正好可以变成你们区别于普通 Agent Memory 的亮点。
 
-[1]: https://docs.mem0.ai/core-concepts/memory-operations/update "Update Memory - Mem0"
-[2]: https://help.getzep.com/graphiti/getting-started/overview "Overview | Zep Documentation"
-[3]: https://langchain-ai.github.io/langmem/concepts/conceptual_guide/ "Core Concepts"
-[4]: https://www.letta.com/blog/introducing-the-agent-development-environment "Introducing the Agent Development Environment  | Letta"
+
+这里最该补的是：长连接断线重连、心跳检测、重复消息去重持久化、错误重试、限流处理、启动时 session 检查、运行日志。这些比 OCR/文件提取更影响“像不像能落地使用”。
+
+
+
+所以之前我说后台调度可以暂缓，现在要稍微改一下：\*\*不用做复杂后台定时调度，但要做 listener 运行期间的 maintenance hook。\*\*
+
+也就是说，长连接运行时，每隔一段时间或每处理 N 条消息，自动跑一次轻量 `maintenance()`，这会让生命周期管理真正进入实时闭环。
+
+
+
+\*\*第二优先级：可扩展架构接口，而不是一次性实现所有扩展功能。\*\*
+
+
+
+赛事也看“工程规范、稳定性、可扩展性”。所以你不一定要真的支持所有 image/file/audio/video，但最好让代码结构证明：以后要支持很容易。
+
+
+
+最适合做的是：
+
+
+
+新增 `MessageParser` 独立模块；
+
+按 `msg\_type` 注册 handler；
+
+当前只完整支持 text/post；
+
+image/file/audio/video 先走 metadata placeholder；
+
+未支持类型统一返回 `unsupported\_reason`，不静默丢弃；
+
+SourceRef 里能挂 `media\_refs` 或 `raw\_message\_type`。
+
+
+
+这样路演可以说：当前版本不会伪装理解非文本内容，而是采用可审计降级；后续只需新增 handler，就能扩展 OCR、文件解析、语音转写。这个比现在强行做半吊子 OCR 更专业。
+
+
+
+\*\*第三优先级：存储可扩展性要做“接口化”，SQLite 可以视时间决定。\*\*
+
+
+
+如果评分强调可扩展性，JSON 文件存储确实容易被问：“数据多了怎么办？”
+
+但我不建议马上把主存储完全迁到 SQLite，风险太高。更稳的做法是先做：
+
+
+
+`StorageBackend` 协议/接口；
+
+当前 `JsonStorageBackend` 作为默认实现；
+
+预留 `SQLiteStorageBackend`；
+
+写一个简单设计文档或最小 migration 脚本；
+
+核心 Store 通过 backend 访问，而不是到处直接读写 JSON。
+
+
+
+如果 CC 写代码很快、测试也稳，可以再做一个最小 SQLite 后端。但不要强制替换默认后端。比赛前最稳的是：\*\*JSON 默认可跑，SQLite 作为可扩展后端存在或半完成验证。\*\*
+
+
+
+这样既能回答“可扩展性”，又不牺牲 demo 稳定性。
+
+
+
+\*\*第四优先级：P0-C 生命周期继续保留，但不要再复杂化。\*\*
+
+
+
+你现在 P0-C 已经很好了：forget/correct/supersede/expired/needs\_review/审计/handoff 展示，已经足够支撑“企业记忆不是聊天记录摘要，而是可治理的长期状态”。
+
+
+
+不需要现在加艾宾浩斯公式、引用频率计数器、三级存储漏斗。
+
+但可以把 P0-C 和长连接打通：实时消息触发写入后，顺手跑 maintenance；handoff 前强制跑一次 maintenance；召回时过滤 forgotten/corrected/expired，同时标注 needs\_review。
+
+
+
+这会让生命周期管理真正参与主流程，而不是看起来像一个单独的维护函数。
+
+
+
+\*\*第五优先级：非文本消息继续暂缓内容提取，但不能静默跳过。\*\*
+
+
+
+你说“图片、文件提取没那么必要，可以暂缓，遇到了跳过”，方向基本对，但措辞要升级成：
+
+
+
+\*\*可审计降级，不静默跳过。\*\*
+
+
+
+也就是系统记录：这里有图片/文件/音频消息，当前版本未解析内容，但保留 message\_id、发送人、时间、文件名/类型/链接/unsupported\_reason。
+
+这样评委问到时，你可以说：企业系统不能胡乱解读未解析内容，所以我们先保留证据与扩展点，后续接 OCR/STT/文件解析即可。
+
+
+
+按评分维度重新看，最优路线应该是：
+
+
+
+完整性 \& 价值：优先做实时闭环、长连接稳定、交接摘要、召回过滤、maintenance。
+
+创新性：强调“协作记忆生命周期 + 可审计降级 + 飞书多源记忆框架”，而不是只说用了 LLM。
+
+AI 技术实现：展示规则 + LLM hybrid、schema 校验、生命周期治理、可扩展 MessageParser/StorageBackend。
+
+路演表现：准备一个稳定 demo，展示“群里新增消息 → 记忆更新 → 修正/遗忘 → handoff 交接”。
+
+
+
+所以现在的建议顺序我会改成：
+
+
+
+\*\*1. 长连接可靠性：心跳、断线重连、持久去重、错误日志、限流/失败分类。\*\*
+
+这是你现在最该补的，因为它直接把项目从离线 demo 推到实时系统。
+
+
+
+\*\*2. 配置集中化和安全：去掉硬编码 key，统一 config.local.yaml/env。\*\*
+
+这是工程规范和安全底线。
+
+
+
+\*\*3. maintenance 接入实时流程：启动时、handoff 前、处理消息后 debounce 触发。\*\*
+
+让 P0-C 真正闭环。
+
+
+
+\*\*4. MessageParser 插件化：先做 text/post 完整，非文本 metadata placeholder。\*\*
+
+证明可扩展性，但不投入 OCR/STT。
+
+
+
+\*\*5. StorageBackend 接口化：JSON 默认，SQLite 预留或最小实现。\*\*
+
+证明架构可扩展，不要贸然大迁移。
+
+
+
+\*\*6. 最后再考虑 Docker、完整 OAuth、OCR、文件内容解析、向量库。\*\*
+
+这些是生产化增强，不是当前最关键的决赛加分项。
+
+
+
+一句话：你现在应该把项目包装成一个\*\*实时、可治理、可扩展的飞书协作记忆引擎\*\*。
+
+长连接已经打通后，真正该加码的是“实时闭环稳定性”和“扩展点设计”，而不是急着让它读图片、读文件、搞复杂遗忘公式。
 

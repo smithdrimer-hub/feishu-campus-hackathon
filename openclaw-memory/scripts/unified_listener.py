@@ -51,9 +51,37 @@ DEFAULT_PROJECT = "memory-sandbox"
 DEFAULT_DATA_DIR = "data/unified"
 POLL_INTERVAL = 5  # seconds
 
-# V1.18: 已处理消息去重（防 WS+poll 双重处理）
+# V1.19: 已处理消息去重（持久化 + 内存双层）
 _PROCESSED_MSG_IDS: set[str] = set()
 _MAX_PROCESSED = 500
+_DEDUP_FILE: Path | None = None
+
+
+def init_dedup(data_dir: str) -> None:
+    """启动时从文件加载已处理的消息 ID，实现重启后去重。"""
+    global _DEDUP_FILE
+    _DEDUP_FILE = Path(data_dir) / "processed_msg_ids.json"
+    if _DEDUP_FILE.exists():
+        try:
+            data = json.loads(_DEDUP_FILE.read_text(encoding="utf-8"))
+            cutoff = time.time() - 3600  # 1 小时内的 ID 才有效
+            fresh = {mid for mid, ts in data.items() if ts > cutoff}
+            _PROCESSED_MSG_IDS.update(fresh)
+            logger.info("Loaded %d dedup IDs from %s", len(fresh), _DEDUP_FILE)
+        except Exception:
+            pass
+
+
+def _persist_dedup(msg_id: str) -> None:
+    """将 msg_id 持久化到文件（追加写入）。"""
+    if _DEDUP_FILE is None:
+        return
+    try:
+        entry = {msg_id: time.time()}
+        with _DEDUP_FILE.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
 
 # V1.18: 滑动窗口上下文（多轮对话理解）
 _MSG_BUFFER: list[dict] = []
@@ -96,14 +124,15 @@ def _maybe_push_summary(chat_id: str, adapter, parts: list[str]) -> None:
 
 
 def _is_duplicate(msg_id: str) -> bool:
-    """检查消息是否已处理过。"""
+    """检查消息是否已处理过。持久化写入防重启丢失。"""
     if not msg_id:
         return False
     if msg_id in _PROCESSED_MSG_IDS:
         return True
     _PROCESSED_MSG_IDS.add(msg_id)
+    _persist_dedup(msg_id)
     if len(_PROCESSED_MSG_IDS) > _MAX_PROCESSED:
-        _PROCESSED_MSG_IDS.clear()  # 简单策略：超过上限清空
+        _PROCESSED_MSG_IDS.clear()
     return False
 
 
@@ -184,16 +213,14 @@ def process_message(text: str, chat_id: str, project_id: str,
     # V1.18: Hybrid 模式 (selector: 精确→规则 / 模糊→LLM)
     if use_hybrid:
         try:
+            from config import get_config
             from memory.llm_provider import OpenAIProvider
-            import yaml
-            cfg_path = ROOT / "config.local.yaml"
-            if cfg_path.exists():
-                cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
-                llm_cfg = cfg.get("llm", {})
+            llm_cfg = get_config().llm
+            if llm_cfg.api_key:
                 provider = OpenAIProvider(
-                    api_key=llm_cfg.get("api_key", ""),
-                    base_url=llm_cfg.get("base_url", ""),
-                    model=llm_cfg.get("model", ""),
+                    api_key=llm_cfg.api_key,
+                    base_url=llm_cfg.base_url,
+                    model=llm_cfg.model,
                 )
                 llm_ext = LLMExtractor(provider, fallback=RuleBasedExtractor())
                 extractor = HybridExtractor(
@@ -353,6 +380,7 @@ def _execute_reaction(msg_id, emoji, yes_set, no_set, store, project_id, adapter
 def ws_listen(chat_id: str, project_id: str, data_dir: str,
               adapter, dry_run: bool = False, use_hybrid: bool = False):
     """Real-time WebSocket via lark-cli event +subscribe."""
+    init_dedup(data_dir)
     from adapters.event_listener import EventStreamListener
 
     listener = EventStreamListener(
@@ -390,6 +418,7 @@ def poll_listen(chat_id: str, project_id: str, data_dir: str,
                 adapter, dry_run: bool = False, interval: int = POLL_INTERVAL,
                 use_hybrid: bool = False):
     """Polling fallback via lark-cli im +chat-messages-list."""
+    init_dedup(data_dir)
     logger.info("Polling listener starting (interval=%ds)...", interval)
     while True:
         try:
@@ -441,10 +470,33 @@ def parse_args():
     return p.parse_args()
 
 
+def _verify_startup_session(adapter) -> bool:
+    """V1.19: 启动时验证 lark-cli 已登录。无效则打印错误并返回 False。"""
+    result = adapter.doctor()
+    if result.returncode != 0:
+        logger.error("lark-cli doctor 失败：飞书 CLI 可能未登录或不可用")
+        logger.error("请运行: lark-cli auth login")
+        return False
+    try:
+        data = json.loads(result.stdout) if isinstance(result.stdout, str) else (result.data or {})
+        checks = data.get("checks", []) if isinstance(data, dict) else []
+        for check in checks:
+            if check.get("name") == "token_verified":
+                if "valid" not in check.get("message", "").lower():
+                    logger.error("飞书 token 已过期，请重新登录: lark-cli auth login")
+                    return False
+    except Exception:
+        pass  # doctor 格式可能变化，不阻塞启动
+    return True
+
+
 def main():
     args = parse_args()
     from adapters.lark_cli_adapter import LarkCliAdapter
     adapter = LarkCliAdapter()
+
+    if not _verify_startup_session(adapter):
+        sys.exit(1)
 
     if args.mode == "ws":
         ws_listen(args.chat_id, args.project_id, args.data_dir,

@@ -17,14 +17,29 @@ from memory.schema import MemoryItem, raw_event_id, utc_now_iso
 
 
 class MemoryStore:
-    """Persist raw events and structured memory state in local files."""
+    """Persist raw events and structured memory state.
 
-    def __init__(self, data_dir: str | Path) -> None:
-        """Create a store rooted at data_dir."""
+    V1.19: 支持可替换的 StorageBackend（默认直接读写 JSON 文件）。
+    """
+
+    def __init__(self, data_dir: str | Path, backend=None) -> None:
+        """Create a store rooted at data_dir.
+
+        Args:
+            data_dir: 数据目录路径。
+            backend: 可选 StorageBackend 实例，为 None 时使用内置 JSON 文件存储。
+        """
         self.data_dir = Path(data_dir)
         self.raw_events_path = self.data_dir / "raw_events.jsonl"
         self.memory_state_path = self.data_dir / "memory_state.json"
         self.audit_path = self.data_dir / "audit.jsonl"
+        # V1.19: 可替换后端预留
+        self._backend = backend
+
+    @property
+    def backend(self):
+        """返回当前使用的 StorageBackend（可能为 None，表示使用内置 JSON 存储）。"""
+        return self._backend
 
     # ── V1.12 审计日志 ──────────────────────────────────────────
 
@@ -406,16 +421,38 @@ class MemoryStore:
     def list_items(self, project_id: str | None = None,
                    as_of: str | None = None,
                    user_id: str | None = None,
-                   limit: int = 0, offset: int = 0) -> list[MemoryItem]:
+                   limit: int = 0, offset: int = 0,
+                   include_expired: bool = False,
+                   include_forgotten: bool = False,
+                   include_corrected: bool = False) -> list[MemoryItem]:
         """Return active memory items, optionally filtered and paginated.
 
         V1.12: 增加 user_id 参数。V1.13: 增加 limit/offset 分页。
+        V1.19 P0-C: 增加 include_expired/forgotten/corrected 参数供审计模式。
+                     默认只返回 status='active' 的记忆。
 
         注意：当前实现全量加载 memory_state.json 后在内存中过滤。
         单用户 CLI 场景下（< 10K 条记忆）够用。大规模部署需换 SQLite/PostgreSQL。
         """
         state = self.load_state()
         items = [MemoryItem.from_dict(item) for item in state.get("items", [])]
+
+        # 默认过滤：只保留 status='active'（向后兼容：旧的空 status 视为 active）
+        active_statuses = {"active", ""}
+        if include_expired:
+            active_statuses.add("expired")
+        if include_forgotten:
+            active_statuses.add("forgotten")
+        if include_corrected:
+            active_statuses.add("corrected")
+        items = [item for item in items if item.status in active_statuses]
+
+        # 如果请求了非 active 状态，也从 history 中拉取
+        if include_expired or include_forgotten or include_corrected:
+            history = [MemoryItem.from_dict(h) for h in state.get("history", [])]
+            history = [h for h in history if h.status in active_statuses - {"active", ""}]
+            items = items + history
+
         if project_id is not None:
             items = [item for item in items if item.project_id == project_id]
         if as_of is not None:
@@ -560,6 +597,131 @@ class MemoryStore:
         self.save_state(items, history, processed)
         return target
 
+    def forget_item(
+        self, memory_id: str, reason: str = "",
+        operator_id: str = "system",
+    ) -> MemoryItem | None:
+        """V1.19 P0-C: 人工遗忘一条记忆。
+
+        将条目标记为 'forgotten' 并移入 history，保留完整审计轨迹。
+
+        Args:
+            memory_id: 目标记忆的 memory_id。
+            reason: 遗忘原因，记录在 status_reason 中。
+            operator_id: 操作者 open_id 或 "system"。
+
+        Returns:
+            更新后的 MemoryItem（已在 history 中），找不到时返回 None。
+        """
+        state = self.load_state()
+        items = [MemoryItem.from_dict(it) for it in state.get("items", [])]
+        history = [MemoryItem.from_dict(it) for it in state.get("history", [])]
+        processed = list(state.get("processed_event_ids", []))
+
+        target = None
+        for item in items:
+            if item.memory_id == memory_id:
+                target = item
+                break
+
+        if target is None:
+            return None
+
+        now = utc_now_iso()
+        target.status = "forgotten"
+        target.status_reason = reason
+        target.status_changed_at = now
+        target.status_changed_by = operator_id
+        target.valid_to = now
+        target.review_status = "rejected"
+
+        items = [i for i in items if i.memory_id != memory_id]
+        history.append(target)
+
+        self.audit_log(
+            operator_id, "forget_item",
+            project_id=target.project_id, state_type=target.state_type,
+            detail=f"key={target.key} reason={reason}",
+        )
+        self.save_state(items, history, processed)
+        return target
+
+    def correct_item(
+        self, memory_id: str, new_value: str,
+        reason: str = "", operator_id: str = "system",
+    ) -> MemoryItem | None:
+        """V1.19 P0-C: 人工纠正一条记忆的值。
+
+        原条目标记为 'corrected' 移入 history（保留审计证据），
+        创建新条目作为 active 值（继承原 owner/source_refs/decision_strength 等）。
+
+        Returns:
+            新的 active MemoryItem，找不到原条目时返回 None。
+        """
+        state = self.load_state()
+        items = [MemoryItem.from_dict(it) for it in state.get("items", [])]
+        history = [MemoryItem.from_dict(it) for it in state.get("history", [])]
+        processed = list(state.get("processed_event_ids", []))
+
+        target = None
+        for item in items:
+            if item.memory_id == memory_id:
+                target = item
+                break
+
+        if target is None:
+            return None
+
+        now = utc_now_iso()
+        # 原条目标记为 corrected，移入 history
+        target.status = "corrected"
+        target.status_reason = reason
+        target.status_changed_at = now
+        target.status_changed_by = operator_id
+        target.valid_to = now
+        # 双向关联：旧条目记录 corrected_by_item_id
+        if target.metadata is None:
+            target.metadata = {}
+        # 记录纠正目标（创建新条目后再回填）
+
+        items = [i for i in items if i.memory_id != memory_id]
+        history.append(target)
+
+        # 创建新条目作为 active 值
+        new_metadata = dict(target.metadata or {})
+        new_metadata["corrects_item_id"] = target.memory_id
+        new_item = MemoryItem(
+            project_id=target.project_id,
+            state_type=target.state_type,
+            key=target.key,
+            current_value=new_value[:500],
+            rationale=f"人工纠正 (原值: {target.current_value[:120]}): {reason}",
+            owner=target.owner,
+            status="active",
+            confidence=target.confidence,
+            source_refs=list(target.source_refs),
+            version=target.version + 1,
+            supersedes=[target.memory_id],
+            decision_strength=target.decision_strength,
+            review_status="approved",
+            metadata=new_metadata,
+            status_reason=f"纠正自 {target.memory_id}",
+            status_changed_at=now,
+            status_changed_by=operator_id,
+        )
+        items.append(new_item)
+
+        # 回填：旧条目标记 corrected_by_item_id
+        target.metadata["corrected_by_item_id"] = new_item.memory_id
+
+        self.audit_log(
+            operator_id, "correct_item",
+            project_id=target.project_id, state_type=target.state_type,
+            detail=f"key={target.key} old={target.current_value[:120]} new={new_value[:120]}",
+        )
+        self.save_state(items, history, processed)
+        return new_item
+
     def update_blocker_status(
         self, memory_id: str, new_status: str, extra: dict | None = None,
     ):
@@ -629,6 +791,167 @@ class MemoryStore:
         if swept > 0:
             self.save_state(remaining, history, processed)
         return swept
+
+    # ── V1.19 P0-C 记忆生命周期常量 ──────────────────────────────
+
+    # 不参与自动过期的 state_type（锚点记忆）
+    _ANCHOR_STATE_TYPES = frozenset({"project_goal", "member_status", "deferred"})
+
+    # 只对 action-oriented 类型做 deadline 过期
+    _ACTION_STATE_TYPES = frozenset({"blocker", "next_step"})
+
+    # 基础 TTL 天数（对应 confidence 在 [0.5, 0.8) 区间）
+    _BASE_TTL_DAYS: dict[str, int] = {
+        "deadline_deadline_passed": 7,    # deadline 类型：截止日期已过 + 7 天
+        "next_step": 30,                   # next_step：30 天无更新
+        "tentative_decision": 14,          # tentative 决策：14 天无确认
+    }
+
+    def _compute_ttl_days(self, base_days: int, confidence: float) -> int:
+        """V1.19 P0-C: 根据置信度计算加权 TTL 天数。
+
+        - confidence >= 0.8: TTL × 3（更慢过期）
+        - 0.5 <= confidence < 0.8: TTL 不变
+        - confidence < 0.5: TTL ÷ 2（更快触发 needs_review）
+        """
+        if confidence >= 0.8:
+            return max(base_days * 3, 1)
+        elif confidence >= 0.5:
+            return max(base_days, 1)
+        else:
+            return max(base_days // 2, 1)
+
+    def sweep_expired(self) -> int:
+        """V1.19 P0-C: 扫描所有 active 记忆，将满足 TTL 条件的自动标记状态。
+
+        规则:
+          1. 锚点记忆（project_goal, member_status, deferred）不参与自动过期。
+          2. confirmed 决策不参与自动过期。
+          3. TTL 根据 confidence 加权（三段式）。
+          4. 低置信度（<0.5）标 needs_review，不直接 expired。
+          5. 高置信度（>=0.8）到期后也标 needs_review，不直接 expired。
+          6. deadline 过期只对 blocker/next_step 生效（action-oriented）。
+          7. tentative 决策超时标 needs_review。
+        """
+        now = utc_now_iso()
+        from datetime import datetime, timedelta, timezone as tz
+        now_dt = datetime.now(tz.utc)
+
+        state = self.load_state()
+        items = [MemoryItem.from_dict(it) for it in state.get("items", [])]
+        history = [MemoryItem.from_dict(it) for it in state.get("history", [])]
+        processed = list(state.get("processed_event_ids", []))
+
+        swept = 0
+        needs_review_count = 0
+        remaining = []
+
+        for item in items:
+            # ── 锚点保护 ──
+            if item.state_type in self._ANCHOR_STATE_TYPES:
+                remaining.append(item)
+                continue
+            if (item.state_type == "decision"
+                    and item.decision_strength == "confirmed"):
+                remaining.append(item)
+                continue
+
+            conf = item.confidence
+            expired = False
+            mark_needs_review = False
+
+            # ── deadline 过期：只对 action-oriented 类型 ──
+            if (item.state_type == "deadline"
+                    and self._is_deadline_passed(item, now)):
+                ttl = self._compute_ttl_days(
+                    self._BASE_TTL_DAYS["deadline_deadline_passed"], conf)
+                cutoff = (now_dt - timedelta(days=ttl)).isoformat()
+                if item.recorded_at < cutoff:
+                    if conf < 0.5:
+                        mark_needs_review = True
+                    elif conf >= 0.8:
+                        mark_needs_review = True  # 高置信也不直接过期
+                    else:
+                        expired = True
+
+            # ── next_step 过期：action-oriented ──
+            elif item.state_type == "next_step":
+                ttl = self._compute_ttl_days(
+                    self._BASE_TTL_DAYS["next_step"], conf)
+                cutoff = (now_dt - timedelta(days=ttl)).isoformat()
+                if item.recorded_at and item.recorded_at < cutoff:
+                    if conf < 0.5 or conf >= 0.8:
+                        mark_needs_review = True
+                    else:
+                        expired = True
+
+            # ── tentative 决策 ──
+            elif (item.state_type == "decision"
+                    and item.decision_strength == "tentative"):
+                ttl = self._compute_ttl_days(
+                    self._BASE_TTL_DAYS["tentative_decision"], conf)
+                cutoff = (now_dt - timedelta(days=ttl)).isoformat()
+                if item.recorded_at and item.recorded_at < cutoff:
+                    mark_needs_review = True
+
+            # ── blocker：委托 _sweep_resolved_blockers ──
+            # (不在本方法中处理，maintenance() 会调用)
+
+            if mark_needs_review:
+                item.review_status = "needs_review"
+                item.status_reason = (
+                    f"记忆超过 TTL（confidence={conf:.2f}），自动标记为需要复审"
+                )
+                item.status_changed_at = now
+                item.status_changed_by = "system"
+                needs_review_count += 1
+
+            if expired:
+                item.status = "expired"
+                item.status_reason = (
+                    f"TTL 自动过期 (state_type={item.state_type}, confidence={conf:.2f})"
+                )
+                item.status_changed_at = now
+                item.status_changed_by = "system"
+                item.valid_to = now
+                history.append(item)
+                swept += 1
+                continue
+
+            remaining.append(item)
+
+        if swept > 0 or needs_review_count > 0:
+            self.save_state(remaining, history, processed)
+        return swept
+
+    @staticmethod
+    def _is_deadline_passed(item: MemoryItem, now_iso: str) -> bool:
+        """检查 deadline 类型记忆的截止日期是否已经过去。
+
+        尝试从 current_value 中解析时间信息，
+        复用 date_parser 模块做中文日期识别。
+        """
+        try:
+            from memory.date_parser import parse_relative_deadline
+            from datetime import date
+            today = date.today()
+            result = parse_relative_deadline(item.current_value, today)
+            if result is not None:
+                return result < today
+        except Exception:
+            pass
+        return False
+
+    def maintenance(self) -> dict[str, int]:
+        """V1.19 P0-C: 执行所有定期维护任务。
+
+        Returns:
+            各任务处理数量的 dict。
+        """
+        return {
+            "blockers_swept": self._sweep_resolved_blockers(),
+            "expired_swept": self.sweep_expired(),
+        }
 
     def merge_items(self, target_id: str, source_id: str | None = None):
         """V1.15 OPT-4: Merge source item into target item.
@@ -792,6 +1115,7 @@ class MemoryStore:
                     if self._has_negation_polarity_change(old_item.current_value, new_item.current_value):
                         if old_item.valid_to is None:
                             old_item.valid_to = utc_now_iso()
+                        old_item.status = "superseded"
                         history.append(old_item)
                         new_item.version = old_item.version + 1
                         new_item.supersedes = [*old_item.supersedes, old_item.memory_id]
@@ -804,6 +1128,7 @@ class MemoryStore:
                     if old_item.owner != new_item.owner or old_item.status != new_item.status:
                         if old_item.valid_to is None:
                             old_item.valid_to = utc_now_iso()
+                        old_item.status = "superseded"
                         history.append(old_item)
                         new_item.version = old_item.version + 1
                         new_item.supersedes = [*old_item.supersedes, old_item.memory_id]
@@ -821,6 +1146,7 @@ class MemoryStore:
                 # 内容不同且相似度不高，视为记忆的更新/推翻
                 if old_item.valid_to is None:
                     old_item.valid_to = utc_now_iso()
+                old_item.status = "superseded"
                 history.append(old_item)
                 new_item.version = old_item.version + 1
                 new_item.supersedes = [*old_item.supersedes, old_item.memory_id]
@@ -871,6 +1197,7 @@ class MemoryStore:
                             # 内容相近 → 正常覆盖
                             if existing.valid_to is None:
                                 existing.valid_to = utc_now_iso()
+                            existing.status = "superseded"
                             history.append(existing)
                             new_item.version = existing.version + 1
                             new_item.supersedes = [*existing.supersedes, existing.memory_id]
@@ -895,6 +1222,7 @@ class MemoryStore:
                             if not linked_to_old and not linked_to_new:
                                 if middle.valid_to is None:
                                     middle.valid_to = utc_now_iso()
+                                middle.status = "superseded"
                                 history.append(middle)
                                 items = [i for i in items if i.memory_id != middle.memory_id]
                                 mk = middle.identity_key()
