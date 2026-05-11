@@ -1,0 +1,13 @@
+{
+  "data": {
+    "items": [
+      {
+        "instance_id": "appr_canary_quota",
+        "approval_name": "Aurora 灰度配额提升",
+        "status": "pending",
+        "applicant_id": "ou_zhou",
+        "start_time": "2026-06-09T09:00:00"
+      }
+    ]
+  }
+}

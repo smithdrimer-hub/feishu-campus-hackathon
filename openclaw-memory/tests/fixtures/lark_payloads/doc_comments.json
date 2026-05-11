@@ -1,0 +1,37 @@
+{
+  "data": {
+    "items": [
+      {
+        "comment_id": "cmt_001",
+        "user_id": "ou_lin",
+        "reply_list": {
+          "replies": [
+            {
+              "content": {
+                "elements": [
+                  {"text_run": {"text": "前端能不能先按旧路由跑？"}}
+                ]
+              }
+            }
+          ]
+        }
+      },
+      {
+        "comment_id": "cmt_002",
+        "user_id": "ou_zhou",
+        "reply_list": {
+          "replies": [
+            {
+              "content": {
+                "elements": [
+                  {"text_run": {"text": "决策："}},
+                  {"text_run": {"text": "Envoy 切换排到下一迭代，本次仍用现网 nginx。"}}
+                ]
+              }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

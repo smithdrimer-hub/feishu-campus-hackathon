@@ -1,0 +1,132 @@
+{
+  "scenario_id": "multi_source_approval_lifecycle_v1",
+  "title": "审批状态机闭环：blocker → 申请 → pending → rejected → 二次申请 → approved → resolved",
+  "project_id": "ms-approval",
+  "description": "测试 Memory Engine 的审批生命周期跟踪能力。一个真实的审批场景：测试环境扩容需求出现 → 申请被驳回 → 二次申请通过 → blocker 解除。覆盖飞书审批接入（sync_approvals）和阻塞状态机（open → acknowledged → waiting_external → resolved）的协同。",
+  "events": [
+    {
+      "project_id": "ms-approval", "chat_id": "oc_msap", "message_id": "chat_block_emerge",
+      "text": "测试环境又跑不动了，并发只能跑到 100，商城提测要求至少 1000，必须扩容",
+      "created_at": "2026-05-06T10:00:00",
+      "source_type": "chat",
+      "sender": {"id": "ou_qa", "name": "测试-张蕾", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-approval", "chat_id": "oc_msap", "message_id": "chat_propose_approval",
+      "text": "下一步：我提个 IT 审批，把测试环境从 4C8G 扩到 8C16G",
+      "created_at": "2026-05-06T10:05:00",
+      "source_type": "chat",
+      "sender": {"id": "ou_qa", "name": "测试-张蕾", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-approval", "chat_id": "", "message_id": "approval_v1_pending",
+      "text": "【审批】测试环境扩容申请 v1 — pending\n申请人：测试-张蕾\n说明：商城 v2.0 提测前需扩容到 8C16G",
+      "created_at": "2026-05-06T10:30:00",
+      "source_type": "approval",
+      "source_url": "https://feishu.cn/approval/approval_v1",
+      "sender": {"id": "ou_qa", "name": "测试-张蕾", "sender_type": "approval_sync"}
+    },
+    {
+      "project_id": "ms-approval", "chat_id": "oc_msap", "message_id": "chat_check_status",
+      "text": "运维那边批了吗？提测要等环境啊",
+      "created_at": "2026-05-06T13:00:00",
+      "source_type": "chat",
+      "sender": {"id": "ou_pm", "name": "产品-何璐", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-approval", "chat_id": "", "message_id": "approval_v1_rejected",
+      "text": "【审批】测试环境扩容申请 v1 — rejected\n申请人：测试-张蕾\n审批人：运维-赵伟\n驳回理由：缺少 SRE 容量评估表，请补充后重提",
+      "created_at": "2026-05-06T14:00:00",
+      "source_type": "approval",
+      "source_url": "https://feishu.cn/approval/approval_v1",
+      "sender": {"id": "ou_qa", "name": "测试-张蕾", "sender_type": "approval_sync"}
+    },
+    {
+      "project_id": "ms-approval", "chat_id": "oc_msap", "message_id": "chat_react_reject",
+      "text": "驳回了，说要补 SRE 容量评估表，我下午补完二次提交",
+      "created_at": "2026-05-06T14:10:00",
+      "source_type": "chat",
+      "sender": {"id": "ou_qa", "name": "测试-张蕾", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-approval", "chat_id": "", "message_id": "approval_v2_pending",
+      "text": "【审批】测试环境扩容申请 v2 — pending\n申请人：测试-张蕾\n说明：补充了 SRE 容量评估表（附件），8C16G 申请重提",
+      "created_at": "2026-05-06T16:00:00",
+      "source_type": "approval",
+      "source_url": "https://feishu.cn/approval/approval_v2",
+      "sender": {"id": "ou_qa", "name": "测试-张蕾", "sender_type": "approval_sync"}
+    },
+    {
+      "project_id": "ms-approval", "chat_id": "", "message_id": "approval_v2_approved",
+      "text": "【审批】测试环境扩容申请 v2 — approved\n申请人：测试-张蕾\n审批人：运维-赵伟\n备注：今晚 22:00 维护窗口扩容完成，明天 8 点可用",
+      "created_at": "2026-05-06T18:30:00",
+      "source_type": "approval",
+      "source_url": "https://feishu.cn/approval/approval_v2",
+      "sender": {"id": "ou_qa", "name": "测试-张蕾", "sender_type": "approval_sync"}
+    },
+    {
+      "project_id": "ms-approval", "chat_id": "oc_msap", "message_id": "chat_resolved",
+      "text": "审批通过了！扩容今晚完成，明天可以正常跑压测，阻塞解除",
+      "created_at": "2026-05-06T18:45:00",
+      "source_type": "chat",
+      "sender": {"id": "ou_qa", "name": "测试-张蕾", "sender_type": "user"}
+    }
+  ],
+  "expected_extractions": [
+    {"source_type": "chat", "from_message_id": "chat_block_emerge", "state_type": "blocker", "key_info": "测试环境跑不动 / 需要扩容"},
+    {"source_type": "chat", "from_message_id": "chat_propose_approval", "state_type": "next_step", "key_info": "提 IT 审批"},
+    {"source_type": "approval", "from_message_id": "approval_v1_pending", "state_type": "blocker", "key_info": "审批 pending → 实质阻塞"},
+    {"source_type": "approval", "from_message_id": "approval_v1_rejected", "state_type": "decision", "key_info": "审批被驳回（决策：拒绝）"},
+    {"source_type": "chat", "from_message_id": "chat_react_reject", "state_type": "next_step", "key_info": "补充评估表 + 二次提交"},
+    {"source_type": "approval", "from_message_id": "approval_v2_pending", "state_type": "blocker", "key_info": "二次审批 pending → 仍阻塞"},
+    {"source_type": "approval", "from_message_id": "approval_v2_approved", "state_type": "decision", "key_info": "审批通过 → 决策"},
+    {"source_type": "chat", "from_message_id": "chat_resolved", "state_type": "blocker", "key_info": "阻塞解除（应触发 resolved 状态）"}
+  ],
+  "cross_source_validation": {
+    "blocker_propagation": [
+      {
+        "topic_keywords": ["扩容", "测试环境"],
+        "expected_origin_message_id": "chat_block_emerge",
+        "expected_blocker_status": "resolved",
+        "rationale": "approval approved 后，原始 chat blocker 也应被同步标记 resolved"
+      }
+    ],
+    "blocker_lifecycle": [
+      {
+        "fact": "测试环境扩容阻塞",
+        "timeline": [
+          {"at": "2026-05-06T10:00:00", "source": "chat:chat_block_emerge", "state": "open", "value": "测试环境跑不动"},
+          {"at": "2026-05-06T10:30:00", "source": "approval:approval_v1_pending", "state": "waiting_external", "value": "申请审批中"},
+          {"at": "2026-05-06T14:00:00", "source": "approval:approval_v1_rejected", "state": "open (重新)", "value": "v1 驳回，仍阻塞"},
+          {"at": "2026-05-06T16:00:00", "source": "approval:approval_v2_pending", "state": "waiting_external", "value": "v2 申请中"},
+          {"at": "2026-05-06T18:30:00", "source": "approval:approval_v2_approved", "state": "resolved", "value": "v2 通过 → 阻塞解除"},
+          {"at": "2026-05-06T18:45:00", "source": "chat:chat_resolved", "state": "resolved (确认)", "value": "群里确认解除"}
+        ],
+        "expected_final_state": "blocker.metadata.status = 'resolved'",
+        "expected_history_count": ">=2 (v1 driven and v2 driven blocker版本)",
+        "rationale": "审批 pending = blocker.waiting_external；审批 rejected = blocker.open（回到原点）；审批 approved = blocker.resolved。验证 5 状态机能正确响应 4 个外部审批事件 + 2 个群聊事件"
+      }
+    ],
+    "decision_evolution": [
+      {
+        "topic": "扩容审批结果",
+        "timeline": [
+          {"at": "2026-05-06T14:00:00", "decision": "rejected (v1)", "source": "approval:approval_v1_rejected"},
+          {"at": "2026-05-06T18:30:00", "decision": "approved (v2)", "source": "approval:approval_v2_approved"}
+        ],
+        "expected_final": "approved",
+        "expected_history": "rejected 应保留在 history（可追溯：第一次为什么被驳回）"
+      }
+    ]
+  },
+  "expected_source_distribution": {
+    "calendar": 0,
+    "chat": 5,
+    "doc": 0,
+    "doc_comment": 0,
+    "task": 0,
+    "meeting": 0,
+    "approval": 4
+  },
+  "notes": "这个数据集证明 Memory Engine 不只是'记笔记'——它能跨数据源跟踪状态机。当审批从 pending → rejected → pending → approved 时，关联的 blocker 自动经历 open → waiting_external → open → waiting_external → resolved 完整生命周期。这种'状态联动'是评委会问'如果一直只有审批数据怎么办'的最好回答。"
+}

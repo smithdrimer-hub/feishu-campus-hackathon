@@ -23,7 +23,6 @@ class SourceRef:
     """Evidence anchor pointing back to the original Feishu message.
 
     V1.12: 新增 sender_name/sender_id/source_url 完善证据链。
-    V1.19 P1-A: 新增 media_refs 记录非文本消息的元数据证据。
     """
 
     type: str
@@ -34,21 +33,15 @@ class SourceRef:
     sender_name: str = ""
     sender_id: str = ""
     source_url: str = ""
-    media_refs: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize this source reference into a JSON-compatible dict."""
-        result = asdict(self)
-        # 空列表不写入，减小文件体积
-        if not self.media_refs:
-            result.pop("media_refs", None)
-        return result
+        return asdict(self)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "SourceRef":
         """Create a SourceRef from a JSON-compatible dict.
         V1.12: 向后兼容旧数据（缺失字段默认为空字符串）。
-        V1.19: media_refs 向后兼容。
         """
         return cls(
             type=str(data.get("type", "message")),
@@ -59,7 +52,6 @@ class SourceRef:
             sender_name=str(data.get("sender_name", "")),
             sender_id=str(data.get("sender_id", "")),
             source_url=str(data.get("source_url", "")),
-            media_refs=list(data.get("media_refs", [])),
         )
 
 
@@ -90,7 +82,23 @@ class MemoryItem:
     # V1.15 P0: 可信度字段
     decision_strength: str = ""  # discussion | preference | tentative | confirmed
     review_status: str = ""      # auto_approved | needs_review | approved | rejected
-    metadata: dict[str, Any] = field(default_factory=dict)  # 扩展字段（blocker_status 等）
+    # 扩展字段。当前已知约定（按出现顺序记录，便于跨模块查找）：
+    #   blocker_status        : open | acknowledged | waiting_external | resolved | obsolete
+    #   blocking_reason       : 阻塞原因摘要
+    #   blocked_owner         : 被阻塞的人
+    #   dependency_owner      : 解阻塞所依赖的人 / 角色
+    #   acknowledged_by       : 谁确认收到阻塞
+    #   resolved_by           : 谁解除阻塞 (人/审批/系统)
+    #   resolved_at           : 解除时间 ISO
+    #   blocked_item          : 被阻塞的事项
+    #   approval_status       : pending | approved | rejected
+    #   conflict_status       : conflicting (同主题不同结论)
+    #   conflict_with         : 冲突 memory 的 memory_id
+    #   canonical_topic       : "<state_type>:<token>" 跨源合并索引键
+    #   cross_source_merged   : True 表示这条 item 已经吸收了多个 source_type 的证据
+    #   source_kind           : feishu_task | meeting_action_item | calendar_event 等子类
+    #   triggered_by_message_id: 触发该写入的消息 ID（AI agent 写回时使用）
+    metadata: dict[str, Any] = field(default_factory=dict)
     # V1.19 P0-C: 生命周期状态追踪
     status_reason: str = ""         # 状态变更原因（如 "用户纠正: 负责人实际是李四"）
     status_changed_at: str = ""     # 状态变更时间（ISO）
@@ -174,7 +182,6 @@ def source_ref_from_event(event: dict[str, Any], excerpt: str | None = None) -> 
         sender_name=str(sender.get("name", sender.get("id", ""))),
         sender_id=str(sender.get("id", "")),
         source_url=source_url,
-        media_refs=list(event.get("media_refs", [])),
     )
 
 

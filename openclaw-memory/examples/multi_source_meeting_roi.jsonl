@@ -1,0 +1,74 @@
+{
+  "scenario_id": "multi_source_meeting_roi_v1",
+  "title": "会议纪要 ROI：1 个会议 = 1 决策 + 1 截止日 + 4 待办 + 2 阻塞",
+  "project_id": "ms-mtg-roi",
+  "description": "证明会议纪要是 Memory Engine 性价比最高的数据源。一场 60 分钟周会的飞书妙记 AI 总结 + action items，能直接产出 8+ 条结构化记忆，相当于把会议室里的口头讨论自动结构化进 Memory，0 人力成本。对比同样信息散落到群聊里需要 30+ 条消息。",
+  "events": [
+    {
+      "project_id": "ms-mtg-roi", "chat_id": "", "message_id": "cal_weekly_review",
+      "text": "【日程】商城 v2.0 周会\n负责人：产品-何璐\n议题：本周进度盘点 + 提测前阻塞清理 + 上线 checklist 最终确认\n参会人：前端-吴凡, 前端-小杨, 后端-马超, 测试-张蕾, 运维-赵伟\n视频会议：https://vc.feishu.cn/j/m_weekly",
+      "created_at": "2026-05-06T16:00:00",
+      "source_type": "calendar",
+      "source_url": "https://app.feishu.cn/calendar/event/cal_weekly_review",
+      "sender": {"id": "ou_pm", "name": "产品-何璐", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-mtg-roi", "chat_id": "", "message_id": "minute_weekly_review",
+      "text": "【会议纪要】商城 v2.0 周会\n总结: 本周整体进度落后约 1 天。核心阻塞集中在两处：(1) 设计稿 v2 仍未交付，前端无法启动；(2) 测试环境配置不足，全链路压测无法进行。会上拍板：周五提测范围调整为 P0 三个核心页面（购物车/商品列表/订单），支付页面 P1 推迟到下周一。Vue 3 迁移再延后到 v2.1，本次仍维持 React 18\n待办: 设计师本周内必须交付剩余设计稿 → 设计-小林\n待办: 运维今晚完成测试环境从 4C8G 扩容到 8C16G → 运维-赵伟\n待办: 周五提测范围调整通知客户经理 → 产品-何璐\n待办: 编写支付页面 P1 排期文档 → 前端-小杨",
+      "created_at": "2026-05-06T17:05:00",
+      "source_type": "meeting",
+      "source_url": "https://feishu.cn/minutes/minute_weekly_review",
+      "sender": {"id": "minute_sync", "name": "妙记 · 商城 v2.0 周会", "sender_type": "minute_sync"}
+    },
+    {
+      "project_id": "ms-mtg-roi", "chat_id": "", "message_id": "minute_kickoff_session2",
+      "text": "【会议纪要】商城 v2.0 启动会 (复盘段落)\n总结: 项目目标商城 App v2.0 周五（2026-05-08）前必须提测，周一（2026-05-12）正式发布生产\n待办: 完成商品列表页的接口对接 → 前端-吴凡\n待办: 完成购物车的状态管理 → 前端-吴凡\n待办: PostgreSQL 主从配置 → 后端-马超",
+      "created_at": "2026-05-04T10:30:00",
+      "source_type": "meeting",
+      "source_url": "https://feishu.cn/minutes/minute_kickoff_session2",
+      "sender": {"id": "minute_sync", "name": "妙记 · 商城 v2.0 启动会", "sender_type": "minute_sync"}
+    }
+  ],
+  "expected_extractions": [
+    {"source_type": "calendar", "from_message_id": "cal_weekly_review", "state_type": "next_step", "key_info": "16:00 周会"},
+    {"source_type": "meeting", "from_message_id": "minute_weekly_review", "state_type": "blocker", "key_info": "设计稿 v2 未交付"},
+    {"source_type": "meeting", "from_message_id": "minute_weekly_review", "state_type": "blocker", "key_info": "测试环境配置不足"},
+    {"source_type": "meeting", "from_message_id": "minute_weekly_review", "state_type": "decision", "key_info": "提测范围调整 P0 三个页面"},
+    {"source_type": "meeting", "from_message_id": "minute_weekly_review", "state_type": "decision", "key_info": "Vue 3 延后到 v2.1，本次维持 React 18"},
+    {"source_type": "meeting", "from_message_id": "minute_weekly_review", "state_type": "next_step", "key_info": "设计师交付设计稿"},
+    {"source_type": "meeting", "from_message_id": "minute_weekly_review", "state_type": "next_step", "key_info": "运维扩容今晚完成"},
+    {"source_type": "meeting", "from_message_id": "minute_weekly_review", "state_type": "next_step", "key_info": "通知客户经理"},
+    {"source_type": "meeting", "from_message_id": "minute_weekly_review", "state_type": "next_step", "key_info": "支付 P1 排期文档"},
+    {"source_type": "meeting", "from_message_id": "minute_kickoff_session2", "state_type": "project_goal", "key_info": "商城 v2.0 周五提测"},
+    {"source_type": "meeting", "from_message_id": "minute_kickoff_session2", "state_type": "deadline", "key_info": "周五提测 周一发布"},
+    {"source_type": "meeting", "from_message_id": "minute_kickoff_session2", "state_type": "next_step", "key_info": "商品列表 接口对接"},
+    {"source_type": "meeting", "from_message_id": "minute_kickoff_session2", "state_type": "next_step", "key_info": "购物车状态管理"},
+    {"source_type": "meeting", "from_message_id": "minute_kickoff_session2", "state_type": "next_step", "key_info": "PostgreSQL 主从"}
+  ],
+  "cross_source_validation": {
+    "high_density": [
+      {
+        "source": "meeting:minute_weekly_review",
+        "expected_min_memories": 8,
+        "expected_state_types": ["blocker", "decision", "next_step"],
+        "rationale": "1 个 event → ≥ 8 条 memory（高密度提取）。这是会议纪要 vs 群聊的核心 ROI 差异——同样信息在群聊里需要 30+ 条独立消息"
+      }
+    ],
+    "owner_resolution": [
+      {
+        "expected_owners_extracted": ["设计-小林", "运维-赵伟", "产品-何璐", "前端-小杨", "前端-吴凡", "后端-马超"],
+        "rationale": "会议纪要的 action items 自带 owner 标注（'→ XXX'），系统应能 100% 解析出 owner 字段，比群聊场景准确率更高"
+      }
+    ]
+  },
+  "expected_source_distribution": {
+    "calendar": 1,
+    "chat": 0,
+    "doc": 0,
+    "doc_comment": 0,
+    "task": 0,
+    "meeting": 2,
+    "approval": 0
+  },
+  "notes": "本数据集纯粹证明'会议纪要是高 ROI 数据源'。仅 3 个事件（1 日历 + 2 会议纪要），但应该产出 14+ 条结构化记忆。这个比例（4-5x 提取密度）是赛题里'AI 关键作用'维度的硬证据——AI 生成的会议总结 + action items 让结构化提取从'解析自然语言'变成'解析半结构化数据'，准确率和效率都大幅提升。"
+}

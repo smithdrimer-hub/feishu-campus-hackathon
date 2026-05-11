@@ -1,0 +1,41 @@
+{
+  "scenario_id": "multi_source_fixture_aurora_v1",
+  "title": "Adapter fixture mode: Aurora 项目跨 5 个 sync_* 函数链路",
+  "project_id": "aurora",
+  "description": "Phase C: 验证 sync_doc / sync_doc_comments / sync_tasks / sync_calendar / sync_minutes / sync_approvals 真实 adapter 路径生成的 events 也能被 RuleBased 正确提取。事件由 fixture 触发, payload 见 tests/fixtures/lark_payloads/。",
+  "fixtures": {
+    "sync_doc": {"doc_id": "doc_aurora", "payload": "doc_techplan.json"},
+    "sync_doc_comments": {"doc_id": "doc_aurora", "payload": "doc_comments.json"},
+    "sync_tasks": {"query": "Aurora", "payload": "tasks_search.json"},
+    "sync_calendar": {"start": "2026-06-08", "end": "2026-06-10",
+                      "payload": "calendar_events.json",
+                      "attendees_payload": "calendar_attendees.json"},
+    "sync_minutes": {"start": "2026-06-08", "end": "2026-06-10",
+                     "payload": "minutes_search.json",
+                     "detail_payload": "minute_detail.json"},
+    "sync_approvals_pending": {"status": "pending", "payload": "approvals_pending.json"},
+    "sync_approvals_approved": {"status": "approved", "payload": "approvals_approved.json"}
+  },
+  "expected_extractions": [
+    {"source_type": "doc", "state_type": "project_goal", "key_info": "Aurora 平台 v0.9 上线"},
+    {"source_type": "doc", "state_type": "owner", "key_info": "周明 后端引擎"},
+    {"source_type": "doc", "state_type": "owner", "key_info": "林夏 前端体验"},
+    {"source_type": "doc", "state_type": "owner", "key_info": "陶然"},
+    {"source_type": "doc", "state_type": "decision", "key_info": "Envoy"},
+    {"source_type": "doc", "state_type": "blocker", "key_info": "跨区域容量"},
+    {"source_type": "doc_comment", "state_type": "decision", "key_info": "Envoy 切换排到下一迭代"},
+    {"source_type": "task", "state_type": "next_step", "key_info": "Envoy 网关接入"},
+    {"source_type": "task", "state_type": "deadline", "key_info": "2026-06-10"},
+    {"source_type": "calendar", "state_type": "next_step", "key_info": "Envoy 切换技术评审"},
+    {"source_type": "meeting", "state_type": "next_step", "key_info": "完成 Envoy 灰度脚本"},
+    {"source_type": "meeting", "state_type": "next_step", "key_info": "梳理 5% 流量来源清单"},
+    {"source_type": "meeting", "state_type": "next_step", "key_info": "准备回滚演练 checklist"},
+    {"source_type": "approval", "state_type": "blocker", "key_info": "Aurora 灰度配额提升"},
+    {"source_type": "approval", "state_type": "decision", "key_info": "approved"}
+  ],
+  "cross_source_validation": {
+    "blocker_lifecycle": [
+      {"fact": "Aurora 灰度配额提升", "expected_final_state": "resolved"}
+    ]
+  }
+}

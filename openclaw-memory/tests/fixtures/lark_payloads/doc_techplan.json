@@ -1,0 +1,7 @@
+{
+  "data": {
+    "title": "Aurora 协作平台技术方案",
+    "markdown": "## 项目目标\n目标：完成 Aurora 平台 v0.9 上线，2026-06-15 前提测。\n\n## 团队分工\n负责人：周明 — 后端引擎\n负责人：林夏 — 前端体验\n负责人：陶然 — SRE / 部署\n\n## 技术栈\n决策：API gateway 切到 Envoy；存储沿用 Trino + Iceberg。\n\n## 风险\n阻塞：跨区域容量评估文档还没出，部署节奏待定。\n",
+    "total_length": 184
+  }
+}
