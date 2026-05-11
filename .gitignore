@@ -21,6 +21,13 @@ __pycache__/
 # 个人配置
 .claude/
 
+# 个人工作辅助文件（不在项目中呈现）
+user.md
+current.md
+演示指南.md
+CLAUDE.md
+AGENTS.md
+
 # 嵌入的 git 仓库（仅保留分析笔记，不提交克隆）
 opensourse_code/repos/
 
