@@ -1,0 +1,32 @@
+{
+  "scenario_id": "multi_source_doc_long_v1",
+  "title": "长文档 Chunker：章节、表格、列表、自然段和嵌入表格混合",
+  "project_id": "ms-doc-long",
+  "doc_id": "MSDocLong",
+  "created_at": "2026-05-06T10:00:00",
+  "description": "第二代文档数据集。直接提供 raw_markdown，由 runner 调用 MemoryEngine._chunk_doc_markdown() 生成 doc events，验证非 LLM 文档切块是否能覆盖标题、表格、列表、自然段和嵌入对象。",
+  "raw_markdown": "# 商城 App v2.0 PRD\n\n## 1. 背景\n本次版本主要解决购物车体验差、支付链路不稳定、订单状态同步慢的问题。普通背景描述很多，但不是每句都应该进入 Memory。\n\n## 2. 项目目标\n目标：商城 App v2.0 在 2026-05-08 周五前完成提测，2026-05-12 周一发布。\n\n## 3. 团队分工表\n| 模块 | 负责人 | DDL | 状态 |\n|---|---|---|---|\n| 商品列表 | 前端-吴凡 | 周四 | in_progress |\n| 购物车 | 前端-吴凡 | 周五 | todo |\n| 支付页面 | 前端-小杨 | 下周一 | deferred |\n| API 性能 | 后端-马超 | 周四 | in_progress |\n\n## 4. 技术决策\n- 决策：本次仍使用 React 18，Remix 迁移延后到 v2.1。\n- 决策：购物车状态管理使用 Zustand，不引入 Redux。\n- 阻塞：测试环境扩容审批未通过，全链路压测暂时跑不了。\n\n## 5. 风险与下一步\n1. 下一步：测试-张蕾需要在环境扩容后补一轮压测。\n2. 下一步：产品-何璐需要同步客户经理本次提测范围。\n3. 暂缓：支付页完整能力先不进周五提测。\n4. DDL：周五 18:00 前必须提交提测包。\n\n## 6. 非协作内容\n这里记录一些用户访谈原话、竞品截图说明、视觉风格参考。它们很重要，但不是协作状态，不应该被拆成大量 memory。\n\n## 7. 嵌入数据\n<sheet token=\"sht_abc123\" />\n<bitable token=\"bitable_def456\" />\n\n## 8. 长自然段\n在评审会上大家反复讨论了支付能力是否应该进本次版本。最后倾向认为，为了保证主流程稳定，支付完整能力可以放到下周一晚上上线；但购物车、商品列表和订单主流程必须周五提测。这个段落没有显式“决策：”前缀，但包含真实决策语义，后续应由 Hybrid/LLM 识别。", 
+  "expected_extractions": [
+    {"source_type": "doc", "from_message_id": "doc_MSDocLong_4", "state_type": "project_goal", "key_info": "周五提测 周一发布"},
+    {"source_type": "doc", "from_message_id": "doc_MSDocLong_5", "state_type": "owner", "key_info": "吴凡 商品列表"},
+    {"source_type": "doc", "from_message_id": "doc_MSDocLong_6", "state_type": "owner", "key_info": "吴凡 购物车"},
+    {"source_type": "doc", "from_message_id": "doc_MSDocLong_7", "state_type": "owner", "key_info": "小杨 支付页面"},
+    {"source_type": "doc", "from_message_id": "doc_MSDocLong_8", "state_type": "owner", "key_info": "马超 API"},
+    {"source_type": "doc", "from_message_id": "doc_MSDocLong_9", "state_type": "decision", "key_info": "React 18"},
+    {"source_type": "doc", "from_message_id": "doc_MSDocLong_10", "state_type": "decision", "key_info": "Zustand"},
+    {"source_type": "doc", "from_message_id": "doc_MSDocLong_11", "state_type": "blocker", "key_info": "测试环境扩容审批"},
+    {"source_type": "doc", "from_message_id": "doc_MSDocLong_12", "state_type": "next_step", "key_info": "补一轮压测"},
+    {"source_type": "doc", "from_message_id": "doc_MSDocLong_13", "state_type": "next_step", "key_info": "同步客户经理"},
+    {"source_type": "doc", "from_message_id": "doc_MSDocLong_15", "state_type": "deferred", "key_info": "支付页完整能力"},
+    {"source_type": "doc", "from_message_id": "doc_MSDocLong_14", "state_type": "deadline", "key_info": "周五 18:00"}
+  ],
+  "cross_source_validation": {
+    "high_density": [
+      {"source": "doc:MSDocLong", "expected_min_memories": 12}
+    ]
+  },
+  "expected_source_distribution": {
+    "doc": 1
+  },
+  "notes": "该数据集不模拟 lark-cli fetch_doc，而是直接调用 chunker。用于测试：表格行拆分、列表协作项拆分、嵌入对象识别、长自然段保守保留。"
+}

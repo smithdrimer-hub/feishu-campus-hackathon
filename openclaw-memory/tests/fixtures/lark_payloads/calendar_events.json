@@ -1,0 +1,18 @@
+{
+  "data": {
+    "items": [
+      {
+        "event_id": "cal_envoy_review",
+        "summary": "Envoy 切换技术评审",
+        "description": "议题：灰度切流方案 + 回滚预案",
+        "start_time": "2026-06-08T15:00:00",
+        "end_time": "2026-06-08T16:00:00",
+        "organizer_calendar_id": "cal_aurora",
+        "event_organizer": {"display_name": "周明", "user_id": "ou_zhou"},
+        "free_busy_status": "busy",
+        "vchat": {"meeting_url": "https://vc.feishu.cn/j/m_envoy"},
+        "app_link": "https://app.feishu.cn/calendar/event/cal_envoy_review"
+      }
+    ]
+  }
+}

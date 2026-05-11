@@ -1,0 +1,59 @@
+{
+  "scenario_id": "multi_source_approval_realistic_v1",
+  "title": "真实审批简短载荷：approval 只有 name/status 时仍能影响 Memory",
+  "project_id": "ms-approval-real",
+  "description": "第二代审批数据集。更贴近当前 sync_approvals() 的真实输出：审批 event 文本通常只有 `【审批】name — status`，不带很丰富的说明。用于验证 approval parser 不依赖人为写长说明。",
+  "events": [
+    {
+      "project_id": "ms-approval-real", "chat_id": "oc_msar", "message_id": "chat_env_block",
+      "text": "测试环境还是跑不动，压测卡住了",
+      "created_at": "2026-05-06T10:00:00",
+      "source_type": "chat",
+      "sender": {"id": "ou_qa", "name": "测试-张蕾", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-approval-real", "chat_id": "", "message_id": "approval_short_pending",
+      "text": "【审批】测试环境扩容申请 — pending",
+      "created_at": "2026-05-06T10:10:00",
+      "source_type": "approval",
+      "source_url": "https://feishu.cn/approval/approval_short",
+      "sender": {"id": "ou_qa", "name": "测试-张蕾", "sender_type": "approval_sync"}
+    },
+    {
+      "project_id": "ms-approval-real", "chat_id": "", "message_id": "approval_short_rejected",
+      "text": "【审批】测试环境扩容申请 — rejected",
+      "created_at": "2026-05-06T14:00:00",
+      "source_type": "approval",
+      "source_url": "https://feishu.cn/approval/approval_short",
+      "sender": {"id": "ou_qa", "name": "测试-张蕾", "sender_type": "approval_sync"}
+    },
+    {
+      "project_id": "ms-approval-real", "chat_id": "", "message_id": "approval_short_approved",
+      "text": "【审批】测试环境扩容申请 — approved",
+      "created_at": "2026-05-06T18:00:00",
+      "source_type": "approval",
+      "source_url": "https://feishu.cn/approval/approval_short",
+      "sender": {"id": "ou_qa", "name": "测试-张蕾", "sender_type": "approval_sync"}
+    }
+  ],
+  "expected_extractions": [
+    {"source_type": "chat", "from_message_id": "chat_env_block", "state_type": "blocker", "key_info": "压测卡住"},
+    {"source_type": "approval", "from_message_id": "approval_short_pending", "state_type": "blocker", "key_info": "pending"},
+    {"source_type": "approval", "from_message_id": "approval_short_rejected", "state_type": "decision", "key_info": "rejected"},
+    {"source_type": "approval", "from_message_id": "approval_short_approved", "state_type": "decision", "key_info": "approved"},
+    {"source_type": "approval", "from_message_id": "approval_short_approved", "state_type": "blocker", "key_info": "阻塞解除"}
+  ],
+  "cross_source_validation": {
+    "blocker_lifecycle": [
+      {
+        "fact": "测试环境扩容申请",
+        "expected_final_state": "resolved"
+      }
+    ]
+  },
+  "expected_source_distribution": {
+    "chat": 1,
+    "approval": 3
+  },
+  "notes": "该数据集比 approval_lifecycle 更接近真实 adapter 输出。目标是保证 approval parser 对短文本状态码也有效。"
+}

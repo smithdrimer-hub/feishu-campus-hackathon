@@ -697,10 +697,14 @@ class MemoryEngine:
             return []
         events = []
         for inst in items[:10]:
-            text = f"【审批】{inst.get('approval_name','')} — {inst.get('status',status)}"
+            inst_status = inst.get("status", status)
+            text = f"【审批】{inst.get('approval_name','')} — {inst_status}"
+            # Include status in the message_id so that the same approval
+            # instance transitioning pending -> approved/rejected produces
+            # distinct events instead of being deduped by raw-event id.
             events.append({
                 "project_id": project_id, "chat_id": "",
-                "message_id": f"approval_{inst.get('instance_id','')}",
+                "message_id": f"approval_{inst.get('instance_id','')}_{inst_status}",
                 "text": text, "content": text,
                 "created_at": inst.get("start_time", utc_now_iso()),
                 "source_type": "approval",

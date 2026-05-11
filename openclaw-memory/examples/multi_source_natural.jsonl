@@ -1,0 +1,192 @@
+{
+  "scenario_id": "multi_source_natural_v2",
+  "title": "多源口语化 v2：20 events，含 expected_only_hybrid 标记",
+  "project_id": "ms-natural",
+  "description": "Phase D 第二代口语化数据集。多源 + 不带显式协作关键词，验证 RuleBased 在自然表达下的边界，以及 Hybrid+LLM 是否能补上。expected_only_hybrid=true 的项不计入 RuleBased strict_recall，只在 Hybrid 模式下校验。",
+  "events": [
+    {
+      "project_id": "ms-natural", "chat_id": "oc_msn", "message_id": "chat_n2_001",
+      "text": "今天先保购物车主流程吧，支付那块等小杨回来再说",
+      "created_at": "2026-05-06T09:00:00",
+      "source_type": "chat",
+      "sender": {"id": "ou_pm", "name": "产品-何璐", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-natural", "chat_id": "oc_msn", "message_id": "chat_n2_002",
+      "text": "嗯先按你说的，我把支付入口先藏一下",
+      "created_at": "2026-05-06T09:02:00",
+      "source_type": "chat",
+      "sender": {"id": "ou_fe1", "name": "前端-吴凡", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-natural", "chat_id": "", "message_id": "doc_comment_n2_001",
+      "text": "【文档评论】吴凡：这个跳转链路我先按旧逻辑接，等设计稿补齐再换新交互，可以吗？",
+      "created_at": "2026-05-06T09:30:00",
+      "source_type": "doc_comment",
+      "source_url": "https://www.feishu.cn/docx/MSNdoc",
+      "sender": {"id": "ou_fe1", "name": "前端-吴凡", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-natural", "chat_id": "", "message_id": "doc_comment_n2_002",
+      "text": "【文档评论】何璐：是不是该考虑下 Stripe？比 PayPal 更稳一点",
+      "created_at": "2026-05-06T09:45:00",
+      "source_type": "doc_comment",
+      "source_url": "https://www.feishu.cn/docx/MSNdoc",
+      "sender": {"id": "ou_pm", "name": "产品-何璐", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-natural", "chat_id": "task_source", "message_id": "task_n2_001",
+      "text": "【任务】支付页兜底处理\n状态：todo\n描述：小杨明天回来以后继续，今天先别强上。现在先把入口藏起来，避免提测挡住主流程",
+      "created_at": "2026-05-06T10:00:00",
+      "source_type": "task",
+      "source_url": "https://feishu.cn/task/task_n2_001",
+      "sender": {"id": "ou_fe2", "name": "前端-小杨", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-natural", "chat_id": "", "message_id": "minute_n2_001",
+      "text": "【会议纪要】商城 v2.0 临时同步\n总结: 大家倾向保主流程，购物车和商品列表优先。支付页先作为 P1，不进入周五提测口径\n待办: 何璐今晚同步客户经理范围变更 → 产品-何璐\n待办: 吴凡把购物车状态管理收尾 → 前端-吴凡",
+      "created_at": "2026-05-06T11:00:00",
+      "source_type": "meeting",
+      "source_url": "https://feishu.cn/minutes/minute_n2_001",
+      "sender": {"id": "minute_sync", "name": "妙记 · 临时同步", "sender_type": "minute_sync"}
+    },
+    {
+      "project_id": "ms-natural", "chat_id": "oc_msn", "message_id": "chat_n2_003",
+      "text": "张蕾那边说环境还没扩完，今天压测估计别等了",
+      "created_at": "2026-05-06T13:00:00",
+      "source_type": "chat",
+      "sender": {"id": "ou_pm", "name": "产品-何璐", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-natural", "chat_id": "", "message_id": "approval_n2_001",
+      "text": "【审批】测试环境扩容 — pending",
+      "created_at": "2026-05-06T13:10:00",
+      "source_type": "approval",
+      "source_url": "https://feishu.cn/approval/approval_n2_001",
+      "sender": {"id": "ou_qa", "name": "测试-张蕾", "sender_type": "approval_sync"}
+    },
+    {
+      "project_id": "ms-natural", "chat_id": "oc_msn", "message_id": "chat_n2_004",
+      "text": "马超那个接口大概啥时候能给？前端在等",
+      "created_at": "2026-05-06T13:30:00",
+      "source_type": "chat",
+      "sender": {"id": "ou_fe1", "name": "前端-吴凡", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-natural", "chat_id": "oc_msn", "message_id": "chat_n2_005",
+      "text": "我倾向直接砍掉这次的优惠券模块，下个迭代再搞",
+      "created_at": "2026-05-06T14:00:00",
+      "source_type": "chat",
+      "sender": {"id": "ou_pm", "name": "产品-何璐", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-natural", "chat_id": "oc_msn", "message_id": "chat_n2_006",
+      "text": "+1，优惠券先不做，本次重点放主流程",
+      "created_at": "2026-05-06T14:02:00",
+      "source_type": "chat",
+      "sender": {"id": "ou_fe1", "name": "前端-吴凡", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-natural", "chat_id": "", "message_id": "doc_comment_n2_003",
+      "text": "【文档评论】小杨：这个支付回调先按 Stripe 的写吧，反正我们大概率会切",
+      "created_at": "2026-05-06T15:00:00",
+      "source_type": "doc_comment",
+      "source_url": "https://www.feishu.cn/docx/MSNdoc",
+      "sender": {"id": "ou_fe2", "name": "前端-小杨", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-natural", "chat_id": "task_source", "message_id": "task_n2_002",
+      "text": "【任务】优惠券模块\n状态：todo\n描述：本次先别做，等下个迭代再排",
+      "created_at": "2026-05-06T15:30:00",
+      "source_type": "task",
+      "source_url": "https://feishu.cn/task/task_n2_002",
+      "sender": {"id": "ou_pm", "name": "产品-何璐", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-natural", "chat_id": "", "message_id": "minute_n2_002",
+      "text": "【会议纪要】商城 v2.0 下午同步\n总结: 大家觉得优惠券砍掉是合理的，节奏对得上\n待办: 张蕾盯一下扩容进度 → 测试-张蕾",
+      "created_at": "2026-05-06T16:00:00",
+      "source_type": "meeting",
+      "source_url": "https://feishu.cn/minutes/minute_n2_002",
+      "sender": {"id": "minute_sync", "name": "妙记 · 下午同步", "sender_type": "minute_sync"}
+    },
+    {
+      "project_id": "ms-natural", "chat_id": "oc_msn", "message_id": "chat_n2_007",
+      "text": "@张蕾 等他批了再说，今晚先别折腾环境了",
+      "created_at": "2026-05-06T17:00:00",
+      "source_type": "chat",
+      "sender": {"id": "ou_pm", "name": "产品-何璐", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-natural", "chat_id": "oc_msn", "message_id": "chat_n2_008",
+      "text": "好，那我等审批",
+      "created_at": "2026-05-06T17:02:00",
+      "source_type": "chat",
+      "sender": {"id": "ou_qa", "name": "测试-张蕾", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-natural", "chat_id": "oc_msn", "message_id": "chat_n2_009",
+      "text": "我请假明天一天，事多，麻烦了",
+      "created_at": "2026-05-06T17:30:00",
+      "source_type": "chat",
+      "sender": {"id": "ou_fe2", "name": "前端-小杨", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-natural", "chat_id": "", "message_id": "doc_comment_n2_004",
+      "text": "【文档评论】何璐：要不还是先写 PayPal 那条路？没确定 Stripe 之前别铺太多",
+      "created_at": "2026-05-06T18:00:00",
+      "source_type": "doc_comment",
+      "source_url": "https://www.feishu.cn/docx/MSNdoc",
+      "sender": {"id": "ou_pm", "name": "产品-何璐", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-natural", "chat_id": "", "message_id": "approval_n2_002",
+      "text": "【审批】测试环境扩容 — approved",
+      "created_at": "2026-05-06T19:00:00",
+      "source_type": "approval",
+      "source_url": "https://feishu.cn/approval/approval_n2_001",
+      "sender": {"id": "ou_qa", "name": "测试-张蕾", "sender_type": "approval_sync"}
+    },
+    {
+      "project_id": "ms-natural", "chat_id": "oc_msn", "message_id": "chat_n2_010",
+      "text": "扩容批了，明天一早就能压测，感谢",
+      "created_at": "2026-05-06T19:05:00",
+      "source_type": "chat",
+      "sender": {"id": "ou_qa", "name": "测试-张蕾", "sender_type": "user"}
+    }
+  ],
+  "expected_extractions": [
+    {"source_type": "chat", "from_message_id": "chat_n2_001", "state_type": "deferred", "key_info": "支付等小杨回来"},
+    {"source_type": "doc_comment", "from_message_id": "doc_comment_n2_001", "state_type": "next_step", "key_info": "旧逻辑先接"},
+    {"source_type": "task", "from_message_id": "task_n2_001", "state_type": "next_step", "key_info": "支付页兜底"},
+    {"source_type": "meeting", "from_message_id": "minute_n2_001", "state_type": "decision", "key_info": "支付页 P1 不进周五提测"},
+    {"source_type": "meeting", "from_message_id": "minute_n2_001", "state_type": "next_step", "key_info": "同步客户经理范围变更"},
+    {"source_type": "chat", "from_message_id": "chat_n2_003", "state_type": "blocker", "key_info": "环境还没扩完"},
+    {"source_type": "approval", "from_message_id": "approval_n2_001", "state_type": "blocker", "key_info": "扩容 pending"},
+    {"source_type": "chat", "from_message_id": "chat_n2_005", "state_type": "decision", "key_info": "砍掉优惠券", "expected_only_hybrid": true},
+    {"source_type": "chat", "from_message_id": "chat_n2_009", "state_type": "member_status", "key_info": "小杨明天请假"},
+    {"source_type": "doc_comment", "from_message_id": "doc_comment_n2_004", "state_type": "decision", "key_info": "先写 PayPal", "expected_only_hybrid": true},
+    {"source_type": "doc_comment", "from_message_id": "doc_comment_n2_002", "state_type": "decision", "key_info": "考虑 Stripe", "expected_only_hybrid": true},
+    {"source_type": "doc_comment", "from_message_id": "doc_comment_n2_003", "state_type": "next_step", "key_info": "支付回调按 Stripe 写", "expected_only_hybrid": true},
+    {"source_type": "chat", "from_message_id": "chat_n2_004", "state_type": "blocker", "key_info": "马超接口在等", "expected_only_hybrid": true},
+    {"source_type": "approval", "from_message_id": "approval_n2_002", "state_type": "decision", "key_info": "扩容审批通过"}
+  ],
+  "cross_source_validation": {
+    "blocker_propagation": [
+      {
+        "topic_keywords": ["环境", "扩"],
+        "expected_origin_message_id": "chat_n2_003",
+        "expected_blocker_status": "resolved",
+        "rationale": "扩容 approved 后原始 chat blocker 应被同步标记 resolved"
+      }
+    ]
+  },
+  "expected_source_distribution": {
+    "chat": 10,
+    "doc_comment": 4,
+    "task": 2,
+    "meeting": 2,
+    "approval": 2
+  },
+  "notes": "RuleBased 期望命中 9 条非 hybrid-only 项；Hybrid+LLM 应额外命中 5 条 expected_only_hybrid 项。"
+}

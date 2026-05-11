@@ -1048,6 +1048,239 @@ class MemoryStore:
         processed = list(state.get("processed_event_ids", [])) + list(event_ids)
         self.save_state(items, history, processed)
 
+    @staticmethod
+    def _normalise_person_name(name: str) -> str:
+        """Normalise role-prefixed names like '后端-马超' → '马超'."""
+        value = str(name or "").strip()
+        if "-" in value:
+            value = value.split("-")[-1].strip()
+        return value
+
+    # Tokens that are too generic to anchor a topic. Project-agnostic.
+    _TOPIC_STOPWORDS = frozenset({
+        # cross-source structural words
+        "文档", "任务", "会议", "纪要", "会议纪要", "负责人", "状态", "截止",
+        "截止日期", "截止时间", "决策", "目标", "项目", "需要", "完成", "使用",
+        "负责", "说明", "总结", "待办", "审批", "申请", "通过", "驳回",
+        "拒绝", "评审", "上线", "提测", "发布", "迭代", "版本",
+        # generic time / quantity words
+        "今天", "明天", "后天", "昨天", "本周", "下周", "今晚", "下午", "上午",
+        "早上", "晚上", "下个", "上个", "本月", "本季度", "本年度",
+        # generic verbs / adjectives
+        "搞定", "搞完", "弄完", "做完", "开始", "继续", "暂停", "推进", "确认",
+        "讨论", "同步", "协助", "配合", "帮忙", "推动", "重要", "紧急",
+        # filler punctuation-ish runs
+        "这个", "那个", "一些", "一下", "之后", "之前", "之间", "应该", "可能",
+    })
+
+    @staticmethod
+    def _extract_topic_tokens(text: str) -> set[str]:
+        """Extract stable topic tokens for conservative cross-source merging.
+
+        Project-agnostic implementation:
+        - English/identifier tokens of length >= 3 are kept lowered.
+        - Chinese substrings of 2-4 chars are kept when not in stopwords.
+        - Pure boilerplate tokens (e.g. 文档/审批/项目) are dropped via
+          ``_TOPIC_STOPWORDS`` so we do not merge based on structural words.
+        """
+        import re
+        if not text:
+            return set()
+        lowered = str(text).lower()
+        eng = {
+            t for t in re.findall(r"[a-z][a-z0-9_+\-.]{2,30}", lowered)
+            if len(t) >= 3
+        }
+        chinese: set[str] = set()
+        for run in re.findall(r"[\u4e00-\u9fff]+", lowered):
+            for size in (4, 3, 2):
+                for i in range(0, len(run) - size + 1):
+                    token = run[i:i + size]
+                    if token in MemoryStore._TOPIC_STOPWORDS:
+                        continue
+                    chinese.add(token)
+        return eng | chinese
+
+    def _canonical_topic_for_item(self, item: MemoryItem) -> str:
+        """Return a conservative topic key used for cross-source evidence merge.
+
+        Empty string means "do not auto-merge". Topic is the lexicographically
+        smallest meaningful token, prefixed by ``state_type``. The actual
+        sameness check happens in ``_find_canonical_match`` via token overlap,
+        not via this single key, so a single shared key is enough as an index.
+        """
+        if item.state_type not in ("decision", "deadline", "owner", "next_step"):
+            return ""
+        if item.state_type == "owner":
+            owner = self._normalise_person_name(item.owner or item.current_value)
+            return f"owner:{owner}" if owner else ""
+
+        text = "\n".join(
+            [item.current_value, item.rationale]
+            + [ref.excerpt for ref in item.source_refs]
+        )
+        tokens = self._extract_topic_tokens(text)
+        # Prefer the longest stable token as the index key – it is the most
+        # discriminative candidate. We keep only tokens with len >= 3 to avoid
+        # matching on common 2-char fragments.
+        stable = sorted([t for t in tokens if len(t) >= 3], key=lambda t: (-len(t), t))
+        if stable:
+            return f"{item.state_type}:{stable[0]}"
+        return ""
+
+    def _ensure_canonical_topic(self, item: MemoryItem) -> str:
+        meta = dict(item.metadata or {})
+        topic = str(meta.get("canonical_topic", "")) or self._canonical_topic_for_item(item)
+        if topic:
+            meta["canonical_topic"] = topic
+            item.metadata = meta
+        return topic
+
+    def _topic_tokens_for_item(self, item: MemoryItem) -> set[str]:
+        text = "\n".join(
+            [item.current_value, item.rationale]
+            + [ref.excerpt for ref in item.source_refs]
+        )
+        return self._extract_topic_tokens(text)
+
+    @staticmethod
+    def _topic_token_overlap(a: set[str], b: set[str]) -> int:
+        if not a or not b:
+            return 0
+        return len(a & b)
+
+    def _find_canonical_match(self, items: list[MemoryItem], new_item: MemoryItem) -> MemoryItem | None:
+        """Find a safe cross-source match for evidence accumulation only.
+
+        Match requires three things:
+        - same project + same state_type
+        - shared canonical_topic key OR >=2 overlapping topic tokens
+        - no obvious conflict signal (different owner / status / approval state /
+          override or cancel words)
+
+        Override / discussion decisions are intentionally excluded so they stay
+        reviewable instead of being merged into an existing active decision.
+        """
+        new_topic = self._ensure_canonical_topic(new_item)
+        if not new_topic:
+            return None
+        if new_item.state_type == "decision":
+            if new_item.review_status == "needs_review":
+                return None
+            override_or_cancel = ("改为", "不再", "换成", "改成", "改用", "废弃",
+                                  "取消", "不用", "废止", "推翻")
+            if any(signal in new_item.current_value for signal in override_or_cancel):
+                return None
+        new_tokens = self._topic_tokens_for_item(new_item)
+        new_message_ids = {ref.message_id for ref in new_item.source_refs}
+
+        for existing in items:
+            if existing.project_id != new_item.project_id:
+                continue
+            if existing.state_type != new_item.state_type:
+                continue
+            old_topic = self._ensure_canonical_topic(existing)
+            old_tokens = self._topic_tokens_for_item(existing)
+            shared_key = bool(old_topic and old_topic == new_topic)
+            shared_overlap = self._topic_token_overlap(new_tokens, old_tokens) >= 2
+            if not (shared_key or shared_overlap):
+                continue
+            # Cross-source evidence merge requires the new item to bring at
+            # least one fresh message_id; otherwise the two items are just
+            # different parses of the same event and merging them would erase
+            # the more granular one (e.g. meeting action items).
+            old_message_ids = {ref.message_id for ref in existing.source_refs}
+            if new_message_ids and new_message_ids.issubset(old_message_ids):
+                continue
+            old_approval = (existing.metadata or {}).get("approval_status")
+            new_approval = (new_item.metadata or {}).get("approval_status")
+            if old_approval and new_approval and old_approval != new_approval:
+                continue
+            if existing.owner and new_item.owner and existing.owner != new_item.owner:
+                continue
+            if existing.status != new_item.status:
+                continue
+            if self._has_negation_polarity_change(existing.current_value, new_item.current_value):
+                continue
+            # Items with different source_kind from the same event were
+            # produced by different parsers (e.g. _extract_next_step vs
+            # _extract_meeting_action_items) and should not be silently merged.
+            old_kind = (existing.metadata or {}).get("source_kind")
+            new_kind = (new_item.metadata or {}).get("source_kind")
+            if old_kind and new_kind and old_kind != new_kind and not new_message_ids.isdisjoint(old_message_ids):
+                continue
+            return existing
+        return None
+
+    def _propagate_blocker_state_change(
+        self, items: list[MemoryItem], new_item: MemoryItem,
+    ) -> list[MemoryItem]:
+        """Propagate approval-driven blocker state to related existing blockers.
+
+        We update at most one related blocker per call, picking the one with the
+        most overlapping topic tokens (>= 2). To avoid runaway cascades we
+        require:
+
+        - same project_id
+        - state_type == "blocker"
+        - existing blocker is *not* itself approval-derived
+        - existing blocker is in an open / acknowledged / waiting_external state
+
+        The propagated change copies blocker_status / resolved_by / resolved_at
+        from the new item, marks it as needs_review when the approval was
+        rejected (because the previous resolution may have been premature), and
+        appends the approval message as evidence.
+        """
+        new_status = (new_item.metadata or {}).get("blocker_status", "")
+        if new_status not in ("resolved", "open", "waiting_external"):
+            return []
+
+        new_tokens = self._topic_tokens_for_item(new_item)
+        if not new_tokens:
+            return []
+
+        candidate: MemoryItem | None = None
+        candidate_overlap = 0
+        for existing in items:
+            if existing.project_id != new_item.project_id:
+                continue
+            if existing.state_type != "blocker":
+                continue
+            existing_meta = existing.metadata or {}
+            if existing_meta.get("approval_status"):
+                continue
+            existing_status = existing_meta.get("blocker_status", "open")
+            if existing_status in ("resolved", "obsolete"):
+                continue
+            overlap = self._topic_token_overlap(
+                new_tokens, self._topic_tokens_for_item(existing),
+            )
+            if overlap >= 2 and overlap > candidate_overlap:
+                candidate = existing
+                candidate_overlap = overlap
+
+        if candidate is None:
+            return []
+
+        approval_status = (new_item.metadata or {}).get("approval_status", "")
+        meta = dict(candidate.metadata or {})
+        meta["blocker_status"] = new_status
+        if new_status == "resolved":
+            meta["resolved_by"] = (new_item.metadata or {}).get("resolved_by", "审批")
+            meta["resolved_at"] = (new_item.metadata or {}).get("resolved_at", utc_now_iso())
+        if approval_status == "rejected":
+            candidate.review_status = "needs_review"
+        meta["last_state_change_source"] = "approval"
+        candidate.metadata = meta
+
+        # Append the new approval evidence (without duplicating message ids).
+        existing_ids = {ref.message_id for ref in candidate.source_refs}
+        for ref in new_item.source_refs:
+            if ref.message_id not in existing_ids:
+                candidate.source_refs.append(ref)
+                existing_ids.add(ref.message_id)
+        return [candidate]
+
     def upsert_items(self, new_items: Iterable[MemoryItem], processed_ids: Iterable[str] = ()) -> list[MemoryItem]:
         """Insert or supersede active memory items with 4-layer deduplication.
 
@@ -1084,6 +1317,7 @@ class MemoryStore:
         diff_conflicts: list[MemoryItem] = []  # V1.15: conflict tracking
 
         for new_item in new_items:
+            self._ensure_canonical_topic(new_item)
             old_item = by_key.get(new_item.identity_key())
 
             if old_item:
@@ -1151,6 +1385,34 @@ class MemoryStore:
                 new_item.version = old_item.version + 1
                 new_item.supersedes = [*old_item.supersedes, old_item.memory_id]
                 items = [item for item in items if item.memory_id != old_item.memory_id]
+
+            if old_item is None:
+                # Phase B: approval-derived blocker should propagate state to
+                # any existing in-project blocker that talks about the same
+                # topic, so the chat-side blocker stops being "open" when the
+                # approval is approved (or flips back to open on rejection).
+                if (
+                    new_item.state_type == "blocker"
+                    and (new_item.metadata or {}).get("approval_status")
+                ):
+                    propagated = self._propagate_blocker_state_change(items, new_item)
+                    if propagated:
+                        diff_updated.extend(propagated)
+
+                canonical_match = self._find_canonical_match(items, new_item)
+                if canonical_match is not None:
+                    existing_ids = {ref.message_id for ref in canonical_match.source_refs}
+                    for ref in new_item.source_refs:
+                        if ref.message_id not in existing_ids:
+                            canonical_match.source_refs.append(ref)
+                            existing_ids.add(ref.message_id)
+                    canonical_match.confidence = max(canonical_match.confidence, new_item.confidence)
+                    canonical_match.metadata = {
+                        **(canonical_match.metadata or {}),
+                        "cross_source_merged": True,
+                    }
+                    diff_unchanged.append(new_item)
+                    continue
 
             # V1.11 Layer 4: 跨 key 决策/截止日期覆盖
             # V1.15: 冲突检测 — 同主题但 value 差异大时标记冲突而非覆盖

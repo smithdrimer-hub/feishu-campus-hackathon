@@ -1,0 +1,132 @@
+{
+  "scenario_id": "multi_source_consistency_v1",
+  "title": "跨源一致性：同一事实从 4 个数据源累积证据",
+  "project_id": "ms-consist",
+  "description": "测试 Memory Engine 的证据累积能力——同一个事实（数据库选型 PostgreSQL）在群聊/文档/任务/会议纪要 4 个源里被分别提及。系统应该识别出这是同一个 decision，把 4 处证据合并到同一个 MemoryItem 的 source_refs，confidence 应随证据累积上升，而不是产生 4 条孤立的 decision。",
+  "events": [
+    {
+      "project_id": "ms-consist", "chat_id": "oc_msc", "message_id": "chat_db_decision",
+      "text": "讨论了一下，最终方案：数据库用 PostgreSQL，不用 MySQL。理由：JSONB 支持、并发写入更好",
+      "created_at": "2026-05-06T10:00:00",
+      "source_type": "chat",
+      "sender": {"id": "ou_pm", "name": "产品-何璐", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-consist", "chat_id": "oc_msc", "message_id": "chat_db_owner",
+      "text": "数据库这块马超负责，从部署到主从配置都你来",
+      "created_at": "2026-05-06T10:05:00",
+      "source_type": "chat",
+      "sender": {"id": "ou_pm", "name": "产品-何璐", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-consist", "chat_id": "oc_msc", "message_id": "chat_db_ddl",
+      "text": "DDL：周五前 PostgreSQL 主从必须上线",
+      "created_at": "2026-05-06T10:08:00",
+      "source_type": "chat",
+      "sender": {"id": "ou_pm", "name": "产品-何璐", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-consist", "chat_id": "", "message_id": "doc_techstack_section_db",
+      "text": "【文档】商城 v2.0 技术栈说明 › 数据库\n决策：数据库选用 PostgreSQL 14。负责人：后端-马超",
+      "created_at": "2026-05-06T10:30:00",
+      "source_type": "doc",
+      "source_url": "https://www.feishu.cn/docx/MSCdoc",
+      "section": "数据库",
+      "sender": {"id": "doc_sync", "name": "文档《商城 v2.0 技术栈说明》", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-consist", "chat_id": "", "message_id": "doc_techstack_section_ddl",
+      "text": "【文档】商城 v2.0 技术栈说明 › 时间节点\nDDL：PostgreSQL 主从环境周五（2026-05-08）前完成",
+      "created_at": "2026-05-06T10:30:00",
+      "source_type": "doc",
+      "source_url": "https://www.feishu.cn/docx/MSCdoc",
+      "section": "时间节点",
+      "sender": {"id": "doc_sync", "name": "文档《商城 v2.0 技术栈说明》", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-consist", "chat_id": "task_source", "message_id": "task_db_setup",
+      "text": "【任务】PostgreSQL 14 部署与主从配置\n负责人：后端-马超\n状态：in_progress\n2026-05-08\n按技术栈说明文档配置主从。pg_hba.conf 用 SCRAM-SHA-256",
+      "created_at": "2026-05-06T11:00:00",
+      "source_type": "task",
+      "source_url": "https://feishu.cn/task/task_db_setup",
+      "sender": {"id": "ou_be", "name": "后端-马超", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-consist", "chat_id": "task_source", "message_id": "task_db_setup_deadline",
+      "text": "【任务截止】PostgreSQL 14 部署与主从配置\n截止日期：2026-05-08",
+      "created_at": "2026-05-06T11:00:00",
+      "source_type": "task",
+      "source_url": "https://feishu.cn/task/task_db_setup",
+      "sender": {"id": "ou_be", "name": "后端-马超", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-consist", "chat_id": "", "message_id": "minute_arch_review",
+      "text": "【会议纪要】商城 v2.0 架构评审\n总结: 数据库选型确认 PostgreSQL，与现有云资源契合度好，运维成本可控\n待办: 完成 PostgreSQL 主从配置 → 后端-马超\n待办: 写一份 PostgreSQL 备份策略文档 → 后端-马超",
+      "created_at": "2026-05-06T15:00:00",
+      "source_type": "meeting",
+      "source_url": "https://feishu.cn/minutes/minute_arch_review",
+      "sender": {"id": "minute_sync", "name": "妙记 · 架构评审", "sender_type": "minute_sync"}
+    },
+    {
+      "project_id": "ms-consist", "chat_id": "oc_msc", "message_id": "chat_db_progress",
+      "text": "PostgreSQL 主节点已起来，从节点今晚配置",
+      "created_at": "2026-05-06T17:30:00",
+      "source_type": "chat",
+      "sender": {"id": "ou_be", "name": "后端-马超", "sender_type": "user"}
+    }
+  ],
+  "expected_extractions": [
+    {"source_type": "chat", "from_message_id": "chat_db_decision", "state_type": "decision", "key_info": "数据库用 PostgreSQL"},
+    {"source_type": "chat", "from_message_id": "chat_db_owner", "state_type": "owner", "key_info": "马超负责数据库"},
+    {"source_type": "chat", "from_message_id": "chat_db_ddl", "state_type": "deadline", "key_info": "周五前 PostgreSQL 上线"},
+    {"source_type": "doc", "from_message_id": "doc_techstack_section_db", "state_type": "decision", "key_info": "PostgreSQL 14（合并到上面）"},
+    {"source_type": "doc", "from_message_id": "doc_techstack_section_db", "state_type": "owner", "key_info": "马超负责（合并到上面）"},
+    {"source_type": "doc", "from_message_id": "doc_techstack_section_ddl", "state_type": "deadline", "key_info": "周五前（合并）"},
+    {"source_type": "task", "from_message_id": "task_db_setup", "state_type": "next_step", "key_info": "PostgreSQL 部署任务"},
+    {"source_type": "task", "from_message_id": "task_db_setup_deadline", "state_type": "deadline", "key_info": "周五前（合并）"},
+    {"source_type": "meeting", "from_message_id": "minute_arch_review", "state_type": "decision", "key_info": "PostgreSQL 选型确认（合并）"},
+    {"source_type": "meeting", "from_message_id": "minute_arch_review", "state_type": "next_step", "key_info": "主从配置 + 备份策略文档"}
+  ],
+  "cross_source_validation": {
+    "consistency": [
+      {
+        "fact": "决策 数据库选 PostgreSQL",
+        "expected_sources": [
+          "chat:chat_db_decision",
+          "doc:doc_techstack_section_db",
+          "meeting:minute_arch_review"
+        ],
+        "expected_merged": "应合并到同一 decision item，source_refs 至少含 3 条不同 source_type",
+        "expected_confidence": "应高于单源（因为 3 源相互佐证）"
+      },
+      {
+        "fact": "owner 马超 负责数据库",
+        "expected_sources": [
+          "chat:chat_db_owner",
+          "doc:doc_techstack_section_db",
+          "task:task_db_setup"
+        ],
+        "expected_merged": "应合并到同一 owner item，source_refs 至少含 3 条"
+      },
+      {
+        "fact": "deadline 周五前 PostgreSQL 上线",
+        "expected_sources": [
+          "chat:chat_db_ddl",
+          "doc:doc_techstack_section_ddl",
+          "task:task_db_setup_deadline"
+        ],
+        "expected_merged": "应合并到同一 deadline item，source_refs 至少含 3 条"
+      }
+    ]
+  },
+  "expected_source_distribution": {
+    "calendar": 0,
+    "chat": 4,
+    "doc": 2,
+    "doc_comment": 0,
+    "task": 2,
+    "meeting": 1,
+    "approval": 0
+  },
+  "notes": "这个数据集**故意构造高度一致**的多源信息。期望系统识别出 3 个核心事实（数据库选型 / 负责人 / DDL）各有 3 个独立证据来源，而不是产生 9 条孤立 memory。验证 4 层去重的第 3 层（bigram 语义相似度）能跨 source_type 工作。"
+}

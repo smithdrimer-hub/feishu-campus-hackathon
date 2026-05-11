@@ -1,0 +1,300 @@
+{
+  "scenario_id": "multi_source_full_day_v1",
+  "title": "多源全日协同：商城App v2.0 周三的 7 个飞书数据源",
+  "project_id": "ms-fullday",
+  "description": "模拟一个真实的工作日：日历日程 → 群聊讨论 → 文档发布 → 文档评论 → 群聊决策 → 任务创建 → 群聊阻塞 → 审批 pending → 会议纪要 action items → 群聊总结 → 次日日程预告。验证 Memory Engine 能在 7 种数据源（chat/doc/doc_comment/task/calendar/meeting/approval）混合输入下生成完整状态视图。",
+  "events": [
+    {
+      "project_id": "ms-fullday", "chat_id": "", "message_id": "cal_morning_001",
+      "text": "【日程】商城App v2.0 周三早会\n负责人：产品-何璐\n议题：盘点本周进度，对齐周五提测范围\n参会人：前端-吴凡, 前端-小杨, 后端-马超, 测试-张蕾\n视频会议：https://vc.feishu.cn/j/m_8a7c2",
+      "created_at": "2026-05-06T08:30:00",
+      "source_type": "calendar",
+      "source_url": "https://app.feishu.cn/calendar/event/cal_morning_001",
+      "sender": {"id": "ou_pm", "name": "产品-何璐", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-fullday", "chat_id": "oc_msfd", "message_id": "chat_morning_001",
+      "text": "早会马上开始，大家进会议室",
+      "created_at": "2026-05-06T08:58:00",
+      "source_type": "chat",
+      "sender": {"id": "ou_pm", "name": "产品-何璐", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-fullday", "chat_id": "oc_msfd", "message_id": "chat_morning_002",
+      "text": "目标确认：商城App v2.0 周五前必须提测",
+      "created_at": "2026-05-06T09:08:00",
+      "source_type": "chat",
+      "sender": {"id": "ou_pm", "name": "产品-何璐", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-fullday", "chat_id": "oc_msfd", "message_id": "chat_morning_003",
+      "text": "分工：吴凡负责商品列表+购物车，小杨负责支付+订单，马超负责所有后端接口",
+      "created_at": "2026-05-06T09:12:00",
+      "source_type": "chat",
+      "sender": {"id": "ou_pm", "name": "产品-何璐", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-fullday", "chat_id": "oc_msfd", "message_id": "chat_morning_004",
+      "text": "我现在最大的风险是设计稿 v2 还没出，前端动不了",
+      "created_at": "2026-05-06T09:25:00",
+      "source_type": "chat",
+      "sender": {"id": "ou_fe1", "name": "前端-吴凡", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-fullday", "chat_id": "", "message_id": "doc_techplan_v2_section_0",
+      "text": "【文档】商城App v2.0 技术方案 v2 › 项目目标\n商城App v2.0 周五（2026-05-08）前完成核心功能开发并提测，周一（2026-05-12）发布生产。",
+      "created_at": "2026-05-06T10:00:00",
+      "source_type": "doc",
+      "source_url": "https://www.feishu.cn/docx/MSFDtechplan",
+      "section": "项目目标",
+      "sender": {"id": "doc_sync", "name": "文档《商城App v2.0 技术方案 v2》", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-fullday", "chat_id": "", "message_id": "doc_techplan_v2_section_1a",
+      "text": "【文档】商城App v2.0 技术方案 v2 › 团队分工\n负责人：前端-吴凡 — 商品列表、购物车、首页",
+      "created_at": "2026-05-06T10:00:00",
+      "source_type": "doc",
+      "source_url": "https://www.feishu.cn/docx/MSFDtechplan",
+      "section": "团队分工",
+      "sender": {"id": "doc_sync", "name": "文档《商城App v2.0 技术方案 v2》", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-fullday", "chat_id": "", "message_id": "doc_techplan_v2_section_1b",
+      "text": "【文档】商城App v2.0 技术方案 v2 › 团队分工\n负责人：前端-小杨 — 支付页面、订单页面",
+      "created_at": "2026-05-06T10:00:00",
+      "source_type": "doc",
+      "source_url": "https://www.feishu.cn/docx/MSFDtechplan",
+      "section": "团队分工",
+      "sender": {"id": "doc_sync", "name": "文档《商城App v2.0 技术方案 v2》", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-fullday", "chat_id": "", "message_id": "doc_techplan_v2_section_1c",
+      "text": "【文档】商城App v2.0 技术方案 v2 › 团队分工\n负责人：后端-马超 — API、数据库、缓存",
+      "created_at": "2026-05-06T10:00:00",
+      "source_type": "doc",
+      "source_url": "https://www.feishu.cn/docx/MSFDtechplan",
+      "section": "团队分工",
+      "sender": {"id": "doc_sync", "name": "文档《商城App v2.0 技术方案 v2》", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-fullday", "chat_id": "", "message_id": "doc_techplan_v2_section_2",
+      "text": "【文档】商城App v2.0 技术方案 v2 › 技术栈\n决策：前端用 React 18 + TypeScript（沿用 v1.0 技术栈），后端用 Go + PostgreSQL，部署用 K8s",
+      "created_at": "2026-05-06T10:00:00",
+      "source_type": "doc",
+      "source_url": "https://www.feishu.cn/docx/MSFDtechplan",
+      "section": "技术栈",
+      "sender": {"id": "doc_sync", "name": "文档《商城App v2.0 技术方案 v2》", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-fullday", "chat_id": "", "message_id": "doc_techplan_v2_section_3",
+      "text": "【文档】商城App v2.0 技术方案 v2 › 关键时间节点\nDDL：周五（2026-05-08）完成提测；周一（2026-05-12）正式发布",
+      "created_at": "2026-05-06T10:00:00",
+      "source_type": "doc",
+      "source_url": "https://www.feishu.cn/docx/MSFDtechplan",
+      "section": "关键时间节点",
+      "sender": {"id": "doc_sync", "name": "文档《商城App v2.0 技术方案 v2》", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-fullday", "chat_id": "", "message_id": "doc_comment_001",
+      "text": "【文档评论】吴凡：技术栈这一节，React 18 项目越来越大了，要不要考虑 Remix 这种 Meta-framework？路由和数据加载更顺",
+      "created_at": "2026-05-06T10:30:00",
+      "source_type": "doc_comment",
+      "source_url": "https://www.feishu.cn/docx/MSFDtechplan",
+      "sender": {"id": "ou_fe1", "name": "前端-吴凡", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-fullday", "chat_id": "", "message_id": "doc_comment_002",
+      "text": "【文档评论】何璐：可以考虑，但要评估 v1.0 现有代码迁移成本。先内部讨论一下再定",
+      "created_at": "2026-05-06T10:35:00",
+      "source_type": "doc_comment",
+      "source_url": "https://www.feishu.cn/docx/MSFDtechplan",
+      "sender": {"id": "ou_pm", "name": "产品-何璐", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-fullday", "chat_id": "oc_msfd", "message_id": "chat_decision_001",
+      "text": "刚跟吴凡和小杨过了一下，Remix 改动可控，路由和数据加载收益大。最终方案：前端从 React 18 改为 Remix",
+      "created_at": "2026-05-06T11:15:00",
+      "source_type": "chat",
+      "sender": {"id": "ou_pm", "name": "产品-何璐", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-fullday", "chat_id": "oc_msfd", "message_id": "chat_decision_002",
+      "text": "好的，下午开始动手迁移",
+      "created_at": "2026-05-06T11:18:00",
+      "source_type": "chat",
+      "sender": {"id": "ou_fe1", "name": "前端-吴凡", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-fullday", "chat_id": "task_source", "message_id": "task_remix_migration",
+      "text": "【任务】前端迁移到 Remix 框架\n负责人：前端-吴凡\n状态：todo\n2026-05-08\n基于今天的决策，把 React 18 路由 + 数据加载迁移到 Remix。注意保留现有组件 API 兼容",
+      "created_at": "2026-05-06T11:45:00",
+      "source_type": "task",
+      "source_url": "https://feishu.cn/task/task_remix_migration",
+      "sender": {"id": "ou_fe1", "name": "前端-吴凡", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-fullday", "chat_id": "task_source", "message_id": "task_payment_page",
+      "text": "【任务】支付页面开发\n负责人：前端-小杨\n状态：in_progress\n2026-05-08\n微信支付 + 支付宝两个入口，需对接后端 PayService",
+      "created_at": "2026-05-06T11:46:00",
+      "source_type": "task",
+      "source_url": "https://feishu.cn/task/task_payment_page",
+      "sender": {"id": "ou_fe2", "name": "前端-小杨", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-fullday", "chat_id": "task_source", "message_id": "task_api_perf",
+      "text": "【任务】商品列表 API 性能优化\n负责人：后端-马超\n状态：in_progress\n2026-05-07\nP95 从 800ms 降到 200ms 以内，DDL：周四前完成",
+      "created_at": "2026-05-06T11:47:00",
+      "source_type": "task",
+      "source_url": "https://feishu.cn/task/task_api_perf",
+      "sender": {"id": "ou_be", "name": "后端-马超", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-fullday", "chat_id": "oc_msfd", "message_id": "chat_block_001",
+      "text": "下午有个事告诉大家：小杨明天请假一天，家里有事，支付那块他先暂停",
+      "created_at": "2026-05-06T13:30:00",
+      "source_type": "chat",
+      "sender": {"id": "ou_pm", "name": "产品-何璐", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-fullday", "chat_id": "oc_msfd", "message_id": "chat_block_002",
+      "text": "支付不能停太久，吴凡你能不能先帮忙把支付页面的框架搭起来，等小杨回来填业务逻辑",
+      "created_at": "2026-05-06T13:45:00",
+      "source_type": "chat",
+      "sender": {"id": "ou_pm", "name": "产品-何璐", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-fullday", "chat_id": "oc_msfd", "message_id": "chat_block_003",
+      "text": "OK 那 Remix 迁移先暂缓，明天先帮忙搭支付页面",
+      "created_at": "2026-05-06T13:50:00",
+      "source_type": "chat",
+      "sender": {"id": "ou_fe1", "name": "前端-吴凡", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-fullday", "chat_id": "oc_msfd", "message_id": "chat_block_004",
+      "text": "测试环境压测今天又不行了，我提了运维审批，等他们批通了我才能跑全量",
+      "created_at": "2026-05-06T14:30:00",
+      "source_type": "chat",
+      "sender": {"id": "ou_qa", "name": "测试-张蕾", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-fullday", "chat_id": "", "message_id": "approval_test_env",
+      "text": "【审批】测试环境扩容申请 — pending\n申请人：测试-张蕾\n说明：商城App v2.0 提测前需要把测试环境从 4C8G 扩到 8C16G，否则压测跑不动",
+      "created_at": "2026-05-06T14:32:00",
+      "source_type": "approval",
+      "source_url": "https://feishu.cn/approval/approval_test_env",
+      "sender": {"id": "ou_qa", "name": "测试-张蕾", "sender_type": "approval_sync"}
+    },
+    {
+      "project_id": "ms-fullday", "chat_id": "", "message_id": "cal_review_meeting",
+      "text": "【日程】商城App v2.0 技术评审\n负责人：产品-何璐\n议题：Remix 迁移可行性 + 测试环境扩容方案 + 上线 checklist\n参会人：前端-吴凡, 前端-小杨, 后端-马超, 测试-张蕾\n视频会议：https://vc.feishu.cn/j/m_review",
+      "created_at": "2026-05-06T16:00:00",
+      "source_type": "calendar",
+      "source_url": "https://app.feishu.cn/calendar/event/cal_review_meeting",
+      "sender": {"id": "ou_pm", "name": "产品-何璐", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-fullday", "chat_id": "", "message_id": "minute_review_001",
+      "text": "【会议纪要】商城App v2.0 技术评审\n总结: 1) Remix 迁移延后到 v2.1，本次 v2.0 仍用 React 18，避免影响周五提测；2) 测试环境扩容已紧急升级走快批通道，预计今晚批；3) 周五提测范围调整：购物车+商品列表+订单 P0 必交，支付页面 P1 可推迟到周一晚上\n待办: Remix 迁移挪到下个迭代规划文档 → 产品-何璐\n待办: 跟运维确认今晚扩容是否能完成 → 测试-张蕾\n待办: 周五提测范围调整通知到客户经理 → 产品-何璐\n待办: 支付页面 P1 排期，下周一晚上发版 → 前端-小杨",
+      "created_at": "2026-05-06T16:50:00",
+      "source_type": "meeting",
+      "source_url": "https://feishu.cn/minutes/minute_review_001",
+      "sender": {"id": "minute_sync", "name": "妙记 · 技术评审", "sender_type": "minute_sync"}
+    },
+    {
+      "project_id": "ms-fullday", "chat_id": "oc_msfd", "message_id": "chat_recap_001",
+      "text": "评审会同步一下：决策更新——Remix 迁移延后到 v2.1。本次 v2.0 仍用 React 18",
+      "created_at": "2026-05-06T17:05:00",
+      "source_type": "chat",
+      "sender": {"id": "ou_pm", "name": "产品-何璐", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-fullday", "chat_id": "oc_msfd", "message_id": "chat_recap_002",
+      "text": "决策更新：周五提测范围调整为购物车+商品列表+订单（P0），支付页面延期到周一晚上",
+      "created_at": "2026-05-06T17:08:00",
+      "source_type": "chat",
+      "sender": {"id": "ou_pm", "name": "产品-何璐", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-fullday", "chat_id": "oc_msfd", "message_id": "chat_recap_003",
+      "text": "好，那我和马超明天对接购物车接口",
+      "created_at": "2026-05-06T17:10:00",
+      "source_type": "chat",
+      "sender": {"id": "ou_fe1", "name": "前端-吴凡", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-fullday", "chat_id": "", "message_id": "approval_test_env_approved",
+      "text": "【审批】测试环境扩容申请 — approved\n申请人：测试-张蕾\n审批人：运维总监-赵伟\n备注：今晚 22:00 扩容窗口期完成，明天可用",
+      "created_at": "2026-05-06T19:40:00",
+      "source_type": "approval",
+      "source_url": "https://feishu.cn/approval/approval_test_env",
+      "sender": {"id": "ou_qa", "name": "测试-张蕾", "sender_type": "approval_sync"}
+    },
+    {
+      "project_id": "ms-fullday", "chat_id": "", "message_id": "cal_thursday_release_review",
+      "text": "【日程】明日 · 周四上线 checklist 评审\n负责人：产品-何璐\n议题：提测前最后一次 checklist 走查\n参会人：前端-吴凡, 后端-马超, 测试-张蕾\n视频会议：https://vc.feishu.cn/j/m_thursday",
+      "created_at": "2026-05-06T20:00:00",
+      "source_type": "calendar",
+      "source_url": "https://app.feishu.cn/calendar/event/cal_thursday_release_review",
+      "sender": {"id": "ou_pm", "name": "产品-何璐", "sender_type": "user"}
+    }
+  ],
+  "expected_extractions": [
+    {"source_type": "calendar", "from_message_id": "cal_morning_001", "state_type": "next_step", "key_info": "9:00 早会"},
+    {"source_type": "chat", "from_message_id": "chat_morning_002", "state_type": "project_goal", "key_info": "商城App v2.0 周五前提测"},
+    {"source_type": "chat", "from_message_id": "chat_morning_003", "state_type": "owner", "key_info": "吴凡/小杨/马超 三人分工"},
+    {"source_type": "chat", "from_message_id": "chat_morning_004", "state_type": "blocker", "key_info": "设计稿 v2 还没出"},
+    {"source_type": "doc", "from_message_id": "doc_techplan_v2_section_0", "state_type": "project_goal", "key_info": "商城App v2.0 周五提测/周一发布"},
+    {"source_type": "doc", "from_message_id": "doc_techplan_v2_section_1a", "state_type": "owner", "key_info": "吴凡负责商品列表/购物车/首页"},
+    {"source_type": "doc", "from_message_id": "doc_techplan_v2_section_1b", "state_type": "owner", "key_info": "小杨负责支付/订单"},
+    {"source_type": "doc", "from_message_id": "doc_techplan_v2_section_1c", "state_type": "owner", "key_info": "马超负责API/数据库/缓存"},
+    {"source_type": "doc", "from_message_id": "doc_techplan_v2_section_2", "state_type": "decision", "key_info": "技术栈 React 18 + Go"},
+    {"source_type": "doc", "from_message_id": "doc_techplan_v2_section_3", "state_type": "deadline", "key_info": "周五提测 周一发布"},
+    {"source_type": "doc_comment", "from_message_id": "doc_comment_001", "state_type": "decision", "key_info": "考虑用 Remix（讨论级）"},
+    {"source_type": "chat", "from_message_id": "chat_decision_001", "state_type": "decision", "key_info": "前端从 React 18 改为 Remix"},
+    {"source_type": "task", "from_message_id": "task_remix_migration", "state_type": "next_step", "key_info": "Remix 迁移任务"},
+    {"source_type": "task", "from_message_id": "task_payment_page", "state_type": "next_step", "key_info": "支付页面任务"},
+    {"source_type": "task", "from_message_id": "task_api_perf", "state_type": "next_step", "key_info": "API 性能优化"},
+    {"source_type": "task", "from_message_id": "task_api_perf", "state_type": "deadline", "key_info": "周四前完成"},
+    {"source_type": "chat", "from_message_id": "chat_block_001", "state_type": "member_status", "key_info": "小杨明天请假"},
+    {"source_type": "chat", "from_message_id": "chat_block_003", "state_type": "deferred", "key_info": "Remix 迁移先暂缓"},
+    {"source_type": "approval", "from_message_id": "approval_test_env", "state_type": "blocker", "key_info": "测试环境扩容审批 pending → blocker"},
+    {"source_type": "meeting", "from_message_id": "minute_review_001", "state_type": "decision", "key_info": "Remix 迁移延后到 v2.1"},
+    {"source_type": "meeting", "from_message_id": "minute_review_001", "state_type": "decision", "key_info": "提测范围调整：P0 购物车+商品+订单"},
+    {"source_type": "meeting", "from_message_id": "minute_review_001", "state_type": "next_step", "key_info": "Remix 迁移挪到 v2.1 规划文档"},
+    {"source_type": "meeting", "from_message_id": "minute_review_001", "state_type": "next_step", "key_info": "跟运维确认扩容完成"},
+    {"source_type": "approval", "from_message_id": "approval_test_env_approved", "state_type": "decision", "key_info": "扩容审批通过 → 解除 blocker"},
+    {"source_type": "calendar", "from_message_id": "cal_thursday_release_review", "state_type": "next_step", "key_info": "明日 checklist 评审会"}
+  ],
+  "cross_source_validation": {
+    "consistency": [
+      {"fact": "项目目标 商城App v2.0 周五提测", "expected_sources": ["chat:chat_morning_002", "doc:doc_techplan_v2_section_0", "doc:doc_techplan_v2_section_3"], "expected_merged": "应合并到同一 project_goal/deadline，source_refs 至少含 3 条不同 source_type"},
+      {"fact": "owner 吴凡 负责购物车/商品", "expected_sources": ["chat:chat_morning_003", "doc:doc_techplan_v2_section_1a"], "expected_merged": "应合并到同一 owner item"}
+    ],
+    "evolution": [
+      {"fact": "前端框架决策", "timeline": [
+        {"at": "2026-05-06T10:00:00", "source": "doc:doc_techplan_v2_section_2", "value": "React 18", "strength": "tentative"},
+        {"at": "2026-05-06T10:30:00", "source": "doc_comment:doc_comment_001", "value": "考虑 Remix", "strength": "discussion"},
+        {"at": "2026-05-06T11:15:00", "source": "chat:chat_decision_001", "value": "改用 Remix", "strength": "confirmed"},
+        {"at": "2026-05-06T16:50:00", "source": "meeting:minute_review_001", "value": "Remix 延后到 v2.1，本次仍用 React 18", "strength": "confirmed"},
+        {"at": "2026-05-06T17:05:00", "source": "chat:chat_recap_001", "value": "本次 v2.0 仍用 React 18 (确认)", "strength": "confirmed"}
+      ], "expected_final_value": "React 18 (本次 v2.0 维持)", "expected_history_count": ">=2"}
+    ],
+    "blocker_lifecycle": [
+      {"fact": "测试环境扩容", "timeline": [
+        {"at": "2026-05-06T14:30:00", "source": "chat:chat_block_004", "state": "blocker open"},
+        {"at": "2026-05-06T14:32:00", "source": "approval:approval_test_env", "state": "blocker pending"},
+        {"at": "2026-05-06T19:40:00", "source": "approval:approval_test_env_approved", "state": "blocker resolved"}
+      ], "expected_final_state": "resolved 或 obsolete"}
+    ]
+  },
+  "expected_source_distribution": {
+    "calendar": 3,
+    "chat": 14,
+    "doc": 6,
+    "doc_comment": 2,
+    "task": 3,
+    "meeting": 1,
+    "approval": 2
+  },
+  "notes": "这是测试 Memory Engine 多源协同能力的核心数据集。覆盖 7 种 source_type、5 个真实角色、12 小时跨度。验证 4 个能力：(1) 7 源分别能正确提取 (2) 跨源一致信息能合并 (3) 跨源演进决策能形成链 (4) 阻塞从多源累积到 resolved 完整生命周期。"
+}

@@ -1,0 +1,10 @@
+{
+  "data": {
+    "summary": "Envoy 切换灰度方案确认：先 5% 流量，验证一周后再放大；rollback 通过统一开关一键回退。",
+    "action_items": [
+      {"content": "完成 Envoy 灰度脚本", "assignee_name": "周明"},
+      {"content": "梳理 5% 流量来源清单", "assignee_name": "林夏"},
+      {"content": "准备回滚演练 checklist", "assignee_name": "陶然"}
+    ]
+  }
+}

@@ -425,6 +425,48 @@ class RuleBasedExtractor(BaseExtractor):
     # V1.15: 第一人称代词（不作为owner提取，改为解析发送者）
     _SELF_REFERENCE = frozenset({"我", "你", "他", "她", "我们", "你们", "他们", "她们", "大家", "自己"})
 
+    # Tokens that can never be a valid person name even if regex captures them
+    # as the leading group. They are usually domain words bleeding from a
+    # truncated capture (e.g. "部署与主从配置" / "项目").
+    _OWNER_NON_PERSON_TOKENS = frozenset({
+        "部署", "配置", "项目", "任务", "模块", "功能", "需求", "方案", "系统",
+        "服务", "接口", "数据库", "测试", "环境", "前端", "后端", "运维", "产品",
+        "设计", "评审", "上线", "提测", "发布", "迭代", "版本", "今天", "明天",
+        "现在", "之后", "之前", "分工", "团队", "成员", "团队分工", "组织",
+        "负责人", "下一步", "决策", "目标", "状态", "文档", "审批", "纪要",
+        "审核", "数据",
+    })
+
+    @staticmethod
+    def _normalise_person_name(name: str) -> str:
+        """Drop role prefixes like '后端-马超' → '马超' and trim punctuation."""
+        value = (name or "").strip().strip(",.;:，。；：、")
+        if "-" in value:
+            tail = value.split("-")[-1].strip()
+            if tail:
+                value = tail
+        return value
+
+    @classmethod
+    def _is_valid_person_name(cls, name: str) -> bool:
+        """Reject obvious non-person tokens captured by greedy regex."""
+        if not name:
+            return False
+        normalised = cls._normalise_person_name(name)
+        if not normalised:
+            return False
+        if normalised in cls._SELF_REFERENCE:
+            return False
+        if normalised in cls._OWNER_NON_PERSON_TOKENS:
+            return False
+        # Pure ASCII lowercase (e.g. 'todo') is treated as a keyword, not a name.
+        if normalised.isascii() and normalised.islower():
+            return False
+        # Reject runs that look like sentence fragments.
+        if any(ch in normalised for ch in "。！，；：、 \t"):
+            return False
+        return True
+
     # ── V1.17: Rule→Selector 信号体系 ──────────────────────────
 
     # 强不确定语气词（检测到 → 整条消息交给LLM）
@@ -543,6 +585,14 @@ class RuleBasedExtractor(BaseExtractor):
             if not text:
                 continue
 
+            if str(event.get("source_type", "")) == "approval":
+                items.extend(self._extract_approval_status(event, text))
+                continue
+            if str(event.get("source_type", "")) == "task":
+                items.extend(self._extract_task_source(event, text))
+            if str(event.get("source_type", "")) == "calendar":
+                items.extend(self._extract_calendar_source(event, text))
+
             has_signal = self._has_any_signal(text)
 
             # V1.17 selector mode: 决策矩阵（仅 Hybrid 模式生效）
@@ -588,6 +638,8 @@ class RuleBasedExtractor(BaseExtractor):
             items.extend(self._extract_next_step(event, text))
             items.extend(self._extract_member_status(event, text))
             items.extend(self._extract_deadline(event, text))
+            if str(event.get("source_type", "")) == "meeting":
+                items.extend(self._extract_meeting_action_items(event, text))
 
             # V1.17: selector模式下，有信号但规则未提取 → delegate
             if self.selector_mode and len(items) == before_count and has_signal:
@@ -654,22 +706,25 @@ class RuleBasedExtractor(BaseExtractor):
         text_lower = text.lower()
 
         # Pattern 1: "负责人：张三" / "owner：张三" / "owner 改成张三"
-        # 正向预查：名字后面必须跟关键词或句尾，防止贪心捕获整句
-        match = re.search(
+        # 多匹配版本：一段文本里可能出现多个 "负责人：xxx — 模块" 行，
+        # 例如文档分工章节。我们对所有匹配都走 owner 验证。
+        seen_pattern1: set[str] = set()
+        for m in re.finditer(
             r"(?:负责人|owner)\s*(?:[:：]|\s+(?:改成|改为|换成|转给))\s*"
-            r"([A-Za-z0-9_\-一-鿿]{1,20})"
-            r"(?=\s*(?:负责|owner|做|处理|开发|测试|实现|设计|修改|跟进|对接|完成|编写|优化|，|。|！|$))",
+            r"([A-Za-z0-9_\-一-鿿]{1,20})",
             text,
-        )
-        if not match:
-            # 无后续关键词时，只取前 1-4 个字符作为人名（中文名通常 2-4 字）
-            match = re.search(
-                r"(?:负责人|owner)\s*(?:[:：]|\s+(?:改成|改为|换成|转给))\s*"
-                r"([A-Za-z0-9_\-一-鿿]{1,4})",
-                text,
-            )
-        if match:
-            owner_item = self._build_owner_item(event, text, match.group(1))
+        ):
+            candidate = m.group(1)
+            tail = text[m.end():m.end() + 40]
+            domain_match = re.match(r"\s*[—\-–:：]\s*([^\n，。,、；;!]{1,30})", tail)
+            domain = ""
+            if domain_match:
+                domain_raw = domain_match.group(1).strip()
+                domain = self._slugify(domain_raw)
+            if candidate in seen_pattern1:
+                continue
+            seen_pattern1.add(candidate)
+            owner_item = self._build_owner_item(event, text, candidate, domain)
             if owner_item:
                 items.append(owner_item)
 
@@ -797,10 +852,14 @@ class RuleBasedExtractor(BaseExtractor):
         """Build a single owner-type MemoryItem.
 
         V1.15: key 基于 domain 生成，支持多负责人共存。
+        Phase A: drop obvious non-person captures and normalise role prefixes.
         """
         owner = self._resolve_self_reference(owner, event)
         if not owner:  # bot sender → skip
             return None
+        if not self._is_valid_person_name(owner):
+            return None
+        owner = self._normalise_person_name(owner)
         if domain:
             key = f"owner_{domain}"
         else:
@@ -817,7 +876,12 @@ class RuleBasedExtractor(BaseExtractor):
         V1.15: 推断 decision_strength，区分讨论/偏好/暂定/确认。
         """
         lowered = text.lower()
-        decision_words = ("决定", "决策", "确定", "采用", "改为", "不再", "instead", "decide")
+        decision_words = (
+            "决定", "决策", "确定", "采用", "改为", "不再", "instead", "decide",
+            "拍板", "重申", "确认", "废弃", "最终方案",
+        )
+        if str(event.get("source_type", "")) in ("doc_comment", "meeting"):
+            decision_words = (*decision_words, "考虑", "倾向")
         if not any(word in lowered for word in decision_words):
             return []
 
@@ -856,7 +920,10 @@ class RuleBasedExtractor(BaseExtractor):
 
     def _extract_pause(self, event: dict, text: str) -> list[MemoryItem]:
         """Extract paused or deferred work items from a message."""
-        if not any(word in text for word in ("暂缓", "暂停", "延期", "先不", "搁置")):
+        deferred_patterns = (
+            "暂缓", "暂停", "延期", "先不", "搁置", "先别",
+        )
+        if not any(word in text for word in deferred_patterns) and not re.search(r"等.{1,10}回来再", text):
             return []
         return [
             self._base_item(
@@ -882,11 +949,29 @@ class RuleBasedExtractor(BaseExtractor):
         V1.15: Skips messages that describe blocker resolution.
         """
         lowered = text.lower()
-        if not any(word in lowered for word in ("阻塞", "卡住", "风险", "依赖", "blocker", "blocked", "risk")):
+        if not any(word in lowered for word in (
+            "阻塞", "卡住", "风险", "依赖", "blocker", "blocked", "risk",
+            "跑不动", "等他们", "等它", "还没扩完",
+        )):
             return []
-        # Skip messages describing resolution rather than discovery
         if any(s in text for s in self._BLOCKER_RESOLVE_SIGNALS):
-            return []
+            item = self._base_item(
+                event, text, "blocker", self._hash_key(text), text,
+                "Message indicates a blocker has been resolved.", 0.72,
+            )
+            sender = event.get("sender", {}) or {}
+            resolved_by = str(sender.get("name", sender.get("id", ""))) if isinstance(sender, dict) else ""
+            item.metadata = {
+                "blocker_status": "resolved",
+                "blocking_reason": text[:200].replace("\x00", "").replace("\r", " "),
+                "blocked_owner": "",
+                "dependency_owner": "",
+                "acknowledged_by": "",
+                "resolved_by": resolved_by,
+                "resolved_at": str(event.get("created_at", "")),
+                "blocked_item": "",
+            }
+            return [item]
         item = self._base_item(
             event, text, "blocker", self._hash_key(text), text,
             "Message identifies a blocker, risk, or dependency.", 0.7,
@@ -909,13 +994,180 @@ class RuleBasedExtractor(BaseExtractor):
         }
         return [item]
 
+    def _extract_task_source(self, event: dict, text: str) -> list[MemoryItem]:
+        """Extract a Feishu task as a next_step memory."""
+        if "【任务】" not in text:
+            return []
+        if any(status in text.lower() for status in ("completed", "done", "已完成")):
+            return []
+
+        first_line = text.splitlines()[0].replace("【任务】", "").strip()
+        if not first_line:
+            return []
+        owner = None
+        owner_match = re.search(r"负责人\s*[:：]\s*([A-Za-z0-9_\-一-鿿]{1,20})", text)
+        if owner_match:
+            candidate = owner_match.group(1).strip()
+            if self._is_valid_person_name(candidate):
+                owner = self._normalise_person_name(candidate)
+        value = f"{owner} 需要 {first_line}" if owner else first_line
+        item = self._base_item(
+            event,
+            text,
+            "next_step",
+            self._hash_key(f"task:{event.get('message_id', first_line)}"),
+            value,
+            "Feishu task should influence the next action plan.",
+            0.76,
+            owner=owner,
+        )
+        item.metadata = {"source_kind": "feishu_task", "task_title": first_line}
+        return [item]
+
+    def _extract_calendar_source(self, event: dict, text: str) -> list[MemoryItem]:
+        """Extract a Feishu calendar event as a scheduled next step."""
+        if "【日程】" not in text:
+            return []
+        first_line = text.splitlines()[0].replace("【日程】", "").strip()
+        if not first_line:
+            return []
+        owner = None
+        owner_match = re.search(r"负责人\s*[:：]\s*([A-Za-z0-9_\-一-鿿]{1,20})", text)
+        if owner_match:
+            candidate = owner_match.group(1).strip()
+            if self._is_valid_person_name(candidate):
+                owner = self._normalise_person_name(candidate)
+        value = f"日程：{first_line}"
+        item = self._base_item(
+            event,
+            text,
+            "next_step",
+            self._hash_key(f"calendar:{event.get('message_id', first_line)}"),
+            value,
+            "Calendar event should influence the next action plan.",
+            0.70,
+            owner=owner,
+        )
+        item.metadata = {"source_kind": "calendar_event", "calendar_title": first_line}
+        return [item]
+
+    def _extract_approval_status(self, event: dict, text: str) -> list[MemoryItem]:
+        """Extract memory from Feishu approval events.
+
+        Approval status is structured machine state, not normal chat text:
+        pending keeps the project blocked by an external decision, rejected
+        records a negative decision, and approved records both the decision and
+        the blocker resolution evidence.
+        """
+        lowered = text.lower()
+        status = ""
+        if "pending" in lowered or "审批中" in text or "待审批" in text:
+            status = "pending"
+        elif "rejected" in lowered or "驳回" in text or "拒绝" in text:
+            status = "rejected"
+        elif "approved" in lowered or "通过" in text or "已批准" in text:
+            status = "approved"
+        else:
+            return []
+
+        title = text.splitlines()[0].replace("【审批】", "").strip()
+        key = self._hash_key(f"approval:{title}")
+        items: list[MemoryItem] = []
+
+        if status == "pending":
+            blocker = self._base_item(
+                event, text, "blocker", f"approval_blocker_{key}",
+                f"审批中：{title}",
+                "Approval is pending and blocks project progress.",
+                0.76,
+            )
+            blocker.metadata = {
+                "blocker_status": "waiting_external",
+                "blocking_reason": title,
+                "blocked_owner": "",
+                "dependency_owner": "审批人",
+                "acknowledged_by": "",
+                "resolved_by": "",
+                "resolved_at": "",
+                "blocked_item": title,
+                "approval_status": "pending",
+            }
+            items.append(blocker)
+
+        elif status == "rejected":
+            decision = self._base_item(
+                event, text, "decision", f"approval_decision_{key}",
+                f"审批被驳回：{title}",
+                "Approval was rejected; the related plan needs review or resubmission.",
+                0.78,
+            )
+            decision.decision_strength = "confirmed"
+            decision.review_status = "needs_review"
+            decision.metadata = {"approval_status": "rejected"}
+            items.append(decision)
+
+            blocker = self._base_item(
+                event, text, "blocker", f"approval_blocker_{key}",
+                f"审批被驳回，仍阻塞：{title}",
+                "Approval rejection keeps the work blocked until resubmitted.",
+                0.74,
+            )
+            blocker.metadata = {
+                "blocker_status": "open",
+                "blocking_reason": title,
+                "blocked_owner": "",
+                "dependency_owner": "申请人",
+                "acknowledged_by": "",
+                "resolved_by": "",
+                "resolved_at": "",
+                "blocked_item": title,
+                "approval_status": "rejected",
+            }
+            items.append(blocker)
+
+        elif status == "approved":
+            decision = self._base_item(
+                event, text, "decision", f"approval_decision_{key}",
+                f"审批已通过：{title}",
+                "Approval was approved and can unblock downstream work.",
+                0.82,
+            )
+            decision.decision_strength = "confirmed"
+            decision.review_status = "auto_approved"
+            decision.metadata = {"approval_status": "approved"}
+            items.append(decision)
+
+            blocker = self._base_item(
+                event, text, "blocker", f"approval_blocker_{key}",
+                f"审批通过，阻塞解除：{title}",
+                "Approval completion resolves the external blocker.",
+                0.78,
+            )
+            blocker.metadata = {
+                "blocker_status": "resolved",
+                "blocking_reason": title,
+                "blocked_owner": "",
+                "dependency_owner": "",
+                "acknowledged_by": "",
+                "resolved_by": "审批",
+                "resolved_at": str(event.get("created_at", "")),
+                "blocked_item": title,
+                "approval_status": "approved",
+            }
+            items.append(blocker)
+
+        return items
+
     def _extract_next_step(self, event: dict, text: str) -> list[MemoryItem]:
         """Extract next-step or task-like statements from a message.
 
         V1.15: Extracts action subject as owner (e.g. '李四需要做X' → owner='李四').
         """
         lowered = text.lower()
-        if not any(word in lowered for word in ("下一步", "待办", "todo", "需要", "请", "next")):
+        if not any(word in lowered for word in (
+            "下一步", "待办", "todo", "需要", "请", "next",
+            "补充", "补完", "重提", "确认", "通知", "先按", "先接",
+        )):
             return []
 
         # V1.15: 尝试提取动作主语作为owner
@@ -927,9 +1179,9 @@ class RuleBasedExtractor(BaseExtractor):
             text,
         )
         if name_match:
-            name = name_match.group(1)
-            if name not in self._SELF_REFERENCE and not (name.isascii() and name.islower()):
-                owner = name
+            candidate = name_match.group(1)
+            if self._is_valid_person_name(candidate):
+                owner = self._normalise_person_name(candidate)
 
         return [
             self._base_item(
@@ -938,6 +1190,49 @@ class RuleBasedExtractor(BaseExtractor):
                 0.62, owner=owner,
             )
         ]
+
+    def _extract_meeting_action_items(self, event: dict, text: str) -> list[MemoryItem]:
+        """Extract individual action items from Feishu Minutes text.
+
+        sync_minutes emits compact text with several lines like
+        "待办: 跟运维确认扩容完成 → 测试-张蕾". Each line should become
+        an independent next_step memory with its own owner.
+        """
+        if "待办" not in text:
+            return []
+
+        results: list[MemoryItem] = []
+        for line in text.splitlines():
+            line = line.strip()
+            match = re.match(r"待办\s*[:：]\s*(.+?)(?:\s*[→>]\s*(.+))?$", line)
+            if not match:
+                continue
+            action = match.group(1).strip()
+            raw_owner = (match.group(2) or "").strip()
+            if not action:
+                continue
+            owner = None
+            if raw_owner and self._is_valid_person_name(raw_owner):
+                owner = self._normalise_person_name(raw_owner)
+
+            value = f"{owner} 需要 {action}" if owner else action
+            item = self._base_item(
+                event,
+                line,
+                "next_step",
+                self._hash_key(f"meeting_action:{owner or ''}:{action}"),
+                value,
+                "Meeting minutes action item should influence the next action plan.",
+                0.74,
+                owner=owner,
+            )
+            item.metadata = {
+                "source_kind": "meeting_action_item",
+                "action_item": action,
+            }
+            results.append(item)
+
+        return results
 
     def _extract_member_status(self, event: dict, text: str) -> list[MemoryItem]:
         """V1.12 REAL-1: 提取成员状态信息，支持邻近匹配。
@@ -992,7 +1287,13 @@ class RuleBasedExtractor(BaseExtractor):
         关键词：DDL/截止/deadline/延期/改到/调到
         """
         keywords = ("DDL", "截止", "deadline", "延期", "改到", "调到")
-        if not any(kw in text for kw in keywords):
+        has_explicit_keyword = any(kw in text for kw in keywords)
+        has_implicit_delivery_time = (
+            re.search(r"(下?周[一二三四五六日天]|明天|后天|今天|\d+月\d+[日号]|\d{4}-\d{2}-\d{2})", text)
+            and any(word in text for word in ("提测", "上线", "发布", "交付", "完成"))
+            and str(event.get("source_type", "")) in ("doc", "meeting", "task", "calendar")
+        )
+        if not has_explicit_keyword and not has_implicit_delivery_time:
             return []
         value = self._trim_deadline_value(text)
         return [
@@ -1132,6 +1433,9 @@ class HybridExtractor(BaseExtractor):
         # V1.17: 有 LLM 时才启用 Selector 模式；无 LLM 时退化为全量提取
         if self.llm is not None:
             self.rule.selector_mode = True
+        # Phase D: cumulative LLM call counter exposed for benchmarks.
+        self.llm_call_count = 0
+        self.llm_total_seconds = 0.0
 
     def extract(self, events: Iterable[dict]) -> list[MemoryItem]:
         """V1.17: Selector模式——规则提取有把握的，没把握的交给LLM。"""
@@ -1276,6 +1580,9 @@ class HybridExtractor(BaseExtractor):
         LLM 输出经过完整 schema 校验（validate_candidate_dict），
         校验失败时返回空列表，由调用方决定如何处理。
         """
+        import time as _time
+        self.llm_call_count += 1
+        started = _time.time()
         try:
             return self.llm.extract(events)
         except Exception as e:
@@ -1283,6 +1590,8 @@ class HybridExtractor(BaseExtractor):
             logging.getLogger(__name__).warning(
                 "LLM extraction failed, falling back to rules: %s", e)
             return []
+        finally:
+            self.llm_total_seconds += _time.time() - started
 
     def _merge_results(
         self, rule_items: list[MemoryItem], llm_items: list[MemoryItem]

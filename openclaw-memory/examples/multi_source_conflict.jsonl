@@ -1,0 +1,119 @@
+{
+  "scenario_id": "multi_source_conflict_v1",
+  "title": "跨源冲突：群聊说 React、文档写 Vue、任务跟 Vue、最后会议确认 Vue",
+  "project_id": "ms-conflict",
+  "description": "测试 Memory Engine 处理跨源决策冲突的能力。同一个议题（前端框架），不同源给出不同结论：周一群聊定 React 18、周三技术文档悄悄改成 Vue 3、对应任务也按 Vue 3 创建、周四群里有人疑惑、最后会议纪要确认 Vue。系统应该：(1) 识别出冲突，标记 conflict_status；(2) 不强行覆盖，进审核台；(3) 会议纪要的最终决策能 supersede 早期决策。",
+  "events": [
+    {
+      "project_id": "ms-conflict", "chat_id": "oc_msx", "message_id": "chat_mon_react",
+      "text": "前端最终方案：React 18 + TypeScript。理由：团队熟悉度高，组件库现成",
+      "created_at": "2026-05-04T10:00:00",
+      "source_type": "chat",
+      "sender": {"id": "ou_pm", "name": "产品-何璐", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-conflict", "chat_id": "oc_msx", "message_id": "chat_mon_react_ack",
+      "text": "好的，我开始搭 React 项目骨架",
+      "created_at": "2026-05-04T10:05:00",
+      "source_type": "chat",
+      "sender": {"id": "ou_fe1", "name": "前端-吴凡", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-conflict", "chat_id": "", "message_id": "doc_techstack_wed_v2",
+      "text": "【文档】商城 v2.0 技术方案 › 前端框架\n决策：前端框架使用 Vue 3 + TypeScript + Pinia",
+      "created_at": "2026-05-06T14:00:00",
+      "source_type": "doc",
+      "source_url": "https://www.feishu.cn/docx/MSCdoc",
+      "section": "前端框架",
+      "sender": {"id": "doc_sync", "name": "文档《商城 v2.0 技术方案》", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-conflict", "chat_id": "task_source", "message_id": "task_vue_scaffold",
+      "text": "【任务】Vue 3 项目脚手架搭建\n负责人：前端-吴凡\n状态：todo\n2026-05-07\n按技术方案文档使用 Vite + Vue 3 + Pinia 搭建脚手架",
+      "created_at": "2026-05-06T14:30:00",
+      "source_type": "task",
+      "source_url": "https://feishu.cn/task/task_vue_scaffold",
+      "sender": {"id": "ou_fe1", "name": "前端-吴凡", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-conflict", "chat_id": "oc_msx", "message_id": "chat_thu_confused",
+      "text": "等下，前端框架什么时候变 Vue 了？我周一不是说 React 18 吗？现在群里也没同步过啊",
+      "created_at": "2026-05-07T09:30:00",
+      "source_type": "chat",
+      "sender": {"id": "ou_fe1", "name": "前端-吴凡", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-conflict", "chat_id": "oc_msx", "message_id": "chat_thu_explain",
+      "text": "周三 CTO 看了文档让改的，让走 Vue 3，理由是后续中台项目都要统一到 Vue 3 生态",
+      "created_at": "2026-05-07T09:35:00",
+      "source_type": "chat",
+      "sender": {"id": "ou_pm", "name": "产品-何璐", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-conflict", "chat_id": "", "message_id": "doc_comment_react_vue",
+      "text": "【文档评论】吴凡：这种重大决策变更建议群里也同步一下，我刚才差点又用 React 重新搭脚手架",
+      "created_at": "2026-05-07T09:40:00",
+      "source_type": "doc_comment",
+      "source_url": "https://www.feishu.cn/docx/MSCdoc",
+      "sender": {"id": "ou_fe1", "name": "前端-吴凡", "sender_type": "user"}
+    },
+    {
+      "project_id": "ms-conflict", "chat_id": "", "message_id": "minute_thu_techreview",
+      "text": "【会议纪要】商城 v2.0 技术方案二次评审\n总结: CTO 重申前端必须用 Vue 3，与中台统一。React 方案废弃。后续重大决策必须群里 + 文档同步\n待办: 群里正式公告前端方案为 Vue 3 → 产品-何璐\n待办: Vue 3 项目脚手架本周内完成 → 前端-吴凡",
+      "created_at": "2026-05-07T11:00:00",
+      "source_type": "meeting",
+      "source_url": "https://feishu.cn/minutes/minute_thu_techreview",
+      "sender": {"id": "minute_sync", "name": "妙记 · 技术方案二次评审", "sender_type": "minute_sync"}
+    },
+    {
+      "project_id": "ms-conflict", "chat_id": "oc_msx", "message_id": "chat_thu_official",
+      "text": "正式公告：前端框架最终方案为 Vue 3，废弃 React 18 方案",
+      "created_at": "2026-05-07T11:30:00",
+      "source_type": "chat",
+      "sender": {"id": "ou_pm", "name": "产品-何璐", "sender_type": "user"}
+    }
+  ],
+  "expected_extractions": [
+    {"source_type": "chat", "from_message_id": "chat_mon_react", "state_type": "decision", "key_info": "React 18（早期决策）"},
+    {"source_type": "doc", "from_message_id": "doc_techstack_wed_v2", "state_type": "decision", "key_info": "Vue 3（文档改了）→ 应触发冲突"},
+    {"source_type": "task", "from_message_id": "task_vue_scaffold", "state_type": "next_step", "key_info": "Vue 脚手架（暗示决策）"},
+    {"source_type": "meeting", "from_message_id": "minute_thu_techreview", "state_type": "decision", "key_info": "Vue 3 终审 → 应 supersede React"},
+    {"source_type": "chat", "from_message_id": "chat_thu_official", "state_type": "decision", "key_info": "公告 Vue 3 → 强化最终决策"}
+  ],
+  "cross_source_validation": {
+    "conflict": [
+      {
+        "topic": "前端框架",
+        "conflicting_sources": [
+          {"source": "chat:chat_mon_react", "value": "React 18", "at": "2026-05-04T10:00:00"},
+          {"source": "doc:doc_techstack_wed_v2", "value": "Vue 3", "at": "2026-05-06T14:00:00"}
+        ],
+        "expected_behavior": "系统应识别为冲突（同主题/不同结论/不同源/相同 state_type=decision），不强行覆盖。两条决策应至少有一条 review_status=needs_review 或 conflict_status=conflicting，进审核台让人裁定"
+      }
+    ],
+    "evolution": [
+      {
+        "fact": "前端框架决策最终值",
+        "timeline": [
+          {"at": "2026-05-04T10:00:00", "source": "chat:chat_mon_react", "value": "React 18", "strength": "confirmed"},
+          {"at": "2026-05-06T14:00:00", "source": "doc:doc_techstack_wed_v2", "value": "Vue 3", "strength": "confirmed (但与早期冲突)"},
+          {"at": "2026-05-07T11:00:00", "source": "meeting:minute_thu_techreview", "value": "Vue 3 (CTO 终审)", "strength": "confirmed"},
+          {"at": "2026-05-07T11:30:00", "source": "chat:chat_thu_official", "value": "Vue 3 公告", "strength": "confirmed"}
+        ],
+        "expected_final_value": "Vue 3",
+        "expected_history_count": ">=1 (React 18 应进 history)",
+        "expected_supersede_keyword": "'废弃 React' / '改用 Vue' / 'CTO 重申' 应触发跨 key supersede"
+      }
+    ]
+  },
+  "expected_source_distribution": {
+    "calendar": 0,
+    "chat": 5,
+    "doc": 1,
+    "doc_comment": 1,
+    "task": 1,
+    "meeting": 1,
+    "approval": 0
+  },
+  "notes": "这是测试系统'AI 候选 + 人类裁定'治理理念的核心数据集。冲突应被检测但不被自动消解——交给人。最终 meeting + chat 的明确 supersede 语句（'废弃 React' / 'Vue 3 终审'）应触发跨 key 决策覆盖，把 React 18 标记为 superseded 进 history。"
+}

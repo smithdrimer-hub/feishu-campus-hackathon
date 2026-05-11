@@ -1,0 +1,1104 @@
+{
+  "mode": "rule",
+  "results": [
+    {
+      "dataset": "multi_source_full_day",
+      "status": "OK",
+      "events_in": 30,
+      "memories_out": 31,
+      "history_out": 6,
+      "density_ratio": 1.03,
+      "elapsed_ms": 65,
+      "by_state_type": {
+        "next_step": 7,
+        "owner": 9,
+        "deadline": 1,
+        "blocker": 4,
+        "project_goal": 2,
+        "decision": 10,
+        "deferred": 3,
+        "member_status": 1
+      },
+      "by_source_type": {
+        "calendar": 5,
+        "meeting": 7,
+        "task": 12,
+        "chat": 16,
+        "doc": 6,
+        "approval": 4,
+        "doc_comment": 2
+      },
+      "cross_source_merged_count": 7,
+      "needs_review_count": 11,
+      "strict_recall": "100%",
+      "expected_count": 25,
+      "matched_count": 25,
+      "missed_count": 0,
+      "missed_expected": [],
+      "per_source_recall": {
+        "approval": {
+          "expected": 2,
+          "matched": 2,
+          "recall": "100%"
+        },
+        "calendar": {
+          "expected": 2,
+          "matched": 2,
+          "recall": "100%"
+        },
+        "chat": {
+          "expected": 6,
+          "matched": 6,
+          "recall": "100%"
+        },
+        "doc": {
+          "expected": 6,
+          "matched": 6,
+          "recall": "100%"
+        },
+        "doc_comment": {
+          "expected": 1,
+          "matched": 1,
+          "recall": "100%"
+        },
+        "meeting": {
+          "expected": 4,
+          "matched": 4,
+          "recall": "100%"
+        },
+        "task": {
+          "expected": 4,
+          "matched": 4,
+          "recall": "100%"
+        }
+      },
+      "per_state_recall": {
+        "blocker": {
+          "expected": 2,
+          "matched": 2,
+          "recall": "100%"
+        },
+        "deadline": {
+          "expected": 2,
+          "matched": 2,
+          "recall": "100%"
+        },
+        "decision": {
+          "expected": 6,
+          "matched": 6,
+          "recall": "100%"
+        },
+        "deferred": {
+          "expected": 1,
+          "matched": 1,
+          "recall": "100%"
+        },
+        "member_status": {
+          "expected": 1,
+          "matched": 1,
+          "recall": "100%"
+        },
+        "next_step": {
+          "expected": 7,
+          "matched": 7,
+          "recall": "100%"
+        },
+        "owner": {
+          "expected": 4,
+          "matched": 4,
+          "recall": "100%"
+        },
+        "project_goal": {
+          "expected": 2,
+          "matched": 2,
+          "recall": "100%"
+        }
+      },
+      "actual_state_types": [
+        "blocker",
+        "deadline",
+        "decision",
+        "deferred",
+        "member_status",
+        "next_step",
+        "owner",
+        "project_goal"
+      ],
+      "expected_source_distribution": {
+        "calendar": 3,
+        "chat": 14,
+        "doc": 6,
+        "doc_comment": 2,
+        "task": 3,
+        "meeting": 1,
+        "approval": 2
+      },
+      "validation_dimensions": {
+        "consistency": {
+          "expected": true,
+          "merged_items": 7,
+          "pass": true
+        },
+        "conflict": {
+          "expected": false,
+          "needs_review_or_conflict": 11,
+          "pass": true
+        },
+        "blocker_lifecycle": {
+          "expected": true,
+          "blocker_statuses": {
+            "open": 1,
+            "resolved": 2,
+            "waiting_external": 1
+          },
+          "pass": true
+        },
+        "blocker_propagation": {
+          "expected": false,
+          "checks": [],
+          "pass": true
+        },
+        "high_density": {
+          "expected": false,
+          "pass": true
+        }
+      },
+      "llm_calls": 0,
+      "llm_total_ms": 0,
+      "skipped_hybrid_only_count": 0,
+      "mode_label": "rule"
+    },
+    {
+      "dataset": "multi_source_consistency",
+      "status": "OK",
+      "events_in": 9,
+      "memories_out": 9,
+      "history_out": 1,
+      "density_ratio": 1.0,
+      "elapsed_ms": 9,
+      "by_state_type": {
+        "owner": 3,
+        "deadline": 1,
+        "decision": 3,
+        "next_step": 3
+      },
+      "by_source_type": {
+        "chat": 3,
+        "doc": 3,
+        "task": 4,
+        "meeting": 4
+      },
+      "cross_source_merged_count": 3,
+      "needs_review_count": 2,
+      "strict_recall": "100%",
+      "expected_count": 10,
+      "matched_count": 10,
+      "missed_count": 0,
+      "missed_expected": [],
+      "per_source_recall": {
+        "chat": {
+          "expected": 3,
+          "matched": 3,
+          "recall": "100%"
+        },
+        "doc": {
+          "expected": 3,
+          "matched": 3,
+          "recall": "100%"
+        },
+        "meeting": {
+          "expected": 2,
+          "matched": 2,
+          "recall": "100%"
+        },
+        "task": {
+          "expected": 2,
+          "matched": 2,
+          "recall": "100%"
+        }
+      },
+      "per_state_recall": {
+        "deadline": {
+          "expected": 3,
+          "matched": 3,
+          "recall": "100%"
+        },
+        "decision": {
+          "expected": 3,
+          "matched": 3,
+          "recall": "100%"
+        },
+        "next_step": {
+          "expected": 2,
+          "matched": 2,
+          "recall": "100%"
+        },
+        "owner": {
+          "expected": 2,
+          "matched": 2,
+          "recall": "100%"
+        }
+      },
+      "actual_state_types": [
+        "deadline",
+        "decision",
+        "next_step",
+        "owner"
+      ],
+      "expected_source_distribution": {
+        "calendar": 0,
+        "chat": 4,
+        "doc": 2,
+        "doc_comment": 0,
+        "task": 2,
+        "meeting": 1,
+        "approval": 0
+      },
+      "validation_dimensions": {
+        "consistency": {
+          "expected": true,
+          "merged_items": 3,
+          "pass": true
+        },
+        "conflict": {
+          "expected": false,
+          "needs_review_or_conflict": 2,
+          "pass": true
+        },
+        "blocker_lifecycle": {
+          "expected": false,
+          "blocker_statuses": {},
+          "pass": true
+        },
+        "blocker_propagation": {
+          "expected": false,
+          "checks": [],
+          "pass": true
+        },
+        "high_density": {
+          "expected": false,
+          "pass": true
+        }
+      },
+      "llm_calls": 0,
+      "llm_total_ms": 0,
+      "skipped_hybrid_only_count": 0,
+      "mode_label": "rule"
+    },
+    {
+      "dataset": "multi_source_conflict",
+      "status": "OK",
+      "events_in": 9,
+      "memories_out": 8,
+      "history_out": 2,
+      "density_ratio": 0.89,
+      "elapsed_ms": 10,
+      "by_state_type": {
+        "decision": 5,
+        "next_step": 3,
+        "owner": 2
+      },
+      "by_source_type": {
+        "doc": 1,
+        "task": 4,
+        "meeting": 4,
+        "chat": 2,
+        "doc_comment": 1
+      },
+      "cross_source_merged_count": 2,
+      "needs_review_count": 4,
+      "strict_recall": "100%",
+      "expected_count": 5,
+      "matched_count": 5,
+      "missed_count": 0,
+      "missed_expected": [],
+      "per_source_recall": {
+        "chat": {
+          "expected": 2,
+          "matched": 2,
+          "recall": "100%"
+        },
+        "doc": {
+          "expected": 1,
+          "matched": 1,
+          "recall": "100%"
+        },
+        "meeting": {
+          "expected": 1,
+          "matched": 1,
+          "recall": "100%"
+        },
+        "task": {
+          "expected": 1,
+          "matched": 1,
+          "recall": "100%"
+        }
+      },
+      "per_state_recall": {
+        "decision": {
+          "expected": 4,
+          "matched": 4,
+          "recall": "100%"
+        },
+        "next_step": {
+          "expected": 1,
+          "matched": 1,
+          "recall": "100%"
+        }
+      },
+      "actual_state_types": [
+        "decision",
+        "next_step",
+        "owner"
+      ],
+      "expected_source_distribution": {
+        "calendar": 0,
+        "chat": 5,
+        "doc": 1,
+        "doc_comment": 1,
+        "task": 1,
+        "meeting": 1,
+        "approval": 0
+      },
+      "validation_dimensions": {
+        "consistency": {
+          "expected": false,
+          "merged_items": 2,
+          "pass": true
+        },
+        "conflict": {
+          "expected": true,
+          "needs_review_or_conflict": 4,
+          "pass": true
+        },
+        "blocker_lifecycle": {
+          "expected": false,
+          "blocker_statuses": {},
+          "pass": true
+        },
+        "blocker_propagation": {
+          "expected": false,
+          "checks": [],
+          "pass": true
+        },
+        "high_density": {
+          "expected": false,
+          "pass": true
+        }
+      },
+      "llm_calls": 0,
+      "llm_total_ms": 0,
+      "skipped_hybrid_only_count": 0,
+      "mode_label": "rule"
+    },
+    {
+      "dataset": "multi_source_meeting_roi",
+      "status": "OK",
+      "events_in": 3,
+      "memories_out": 16,
+      "history_out": 0,
+      "density_ratio": 5.33,
+      "elapsed_ms": 16,
+      "by_state_type": {
+        "next_step": 7,
+        "owner": 2,
+        "decision": 2,
+        "blocker": 2,
+        "deadline": 2,
+        "project_goal": 1
+      },
+      "by_source_type": {
+        "calendar": 6,
+        "meeting": 12
+      },
+      "cross_source_merged_count": 2,
+      "needs_review_count": 2,
+      "strict_recall": "100%",
+      "expected_count": 14,
+      "matched_count": 14,
+      "missed_count": 0,
+      "missed_expected": [],
+      "per_source_recall": {
+        "calendar": {
+          "expected": 1,
+          "matched": 1,
+          "recall": "100%"
+        },
+        "meeting": {
+          "expected": 13,
+          "matched": 13,
+          "recall": "100%"
+        }
+      },
+      "per_state_recall": {
+        "blocker": {
+          "expected": 2,
+          "matched": 2,
+          "recall": "100%"
+        },
+        "deadline": {
+          "expected": 1,
+          "matched": 1,
+          "recall": "100%"
+        },
+        "decision": {
+          "expected": 2,
+          "matched": 2,
+          "recall": "100%"
+        },
+        "next_step": {
+          "expected": 8,
+          "matched": 8,
+          "recall": "100%"
+        },
+        "project_goal": {
+          "expected": 1,
+          "matched": 1,
+          "recall": "100%"
+        }
+      },
+      "actual_state_types": [
+        "blocker",
+        "deadline",
+        "decision",
+        "next_step",
+        "owner",
+        "project_goal"
+      ],
+      "expected_source_distribution": {
+        "calendar": 1,
+        "chat": 0,
+        "doc": 0,
+        "doc_comment": 0,
+        "task": 0,
+        "meeting": 2,
+        "approval": 0
+      },
+      "validation_dimensions": {
+        "consistency": {
+          "expected": false,
+          "merged_items": 2,
+          "pass": true
+        },
+        "conflict": {
+          "expected": false,
+          "needs_review_or_conflict": 2,
+          "pass": true
+        },
+        "blocker_lifecycle": {
+          "expected": false,
+          "blocker_statuses": {
+            "open": 2
+          },
+          "pass": true
+        },
+        "blocker_propagation": {
+          "expected": false,
+          "checks": [],
+          "pass": true
+        },
+        "high_density": {
+          "expected": true,
+          "pass": true
+        }
+      },
+      "llm_calls": 0,
+      "llm_total_ms": 0,
+      "skipped_hybrid_only_count": 0,
+      "mode_label": "rule"
+    },
+    {
+      "dataset": "multi_source_approval_lifecycle",
+      "status": "OK",
+      "events_in": 9,
+      "memories_out": 9,
+      "history_out": 0,
+      "density_ratio": 1.0,
+      "elapsed_ms": 7,
+      "by_state_type": {
+        "blocker": 6,
+        "next_step": 1,
+        "decision": 2
+      },
+      "by_source_type": {
+        "approval": 7,
+        "chat": 3
+      },
+      "cross_source_merged_count": 1,
+      "needs_review_count": 3,
+      "strict_recall": "100%",
+      "expected_count": 8,
+      "matched_count": 8,
+      "missed_count": 0,
+      "missed_expected": [],
+      "per_source_recall": {
+        "approval": {
+          "expected": 4,
+          "matched": 4,
+          "recall": "100%"
+        },
+        "chat": {
+          "expected": 4,
+          "matched": 4,
+          "recall": "100%"
+        }
+      },
+      "per_state_recall": {
+        "blocker": {
+          "expected": 4,
+          "matched": 4,
+          "recall": "100%"
+        },
+        "decision": {
+          "expected": 2,
+          "matched": 2,
+          "recall": "100%"
+        },
+        "next_step": {
+          "expected": 2,
+          "matched": 2,
+          "recall": "100%"
+        }
+      },
+      "actual_state_types": [
+        "blocker",
+        "decision",
+        "next_step"
+      ],
+      "expected_source_distribution": {
+        "calendar": 0,
+        "chat": 5,
+        "doc": 0,
+        "doc_comment": 0,
+        "task": 0,
+        "meeting": 0,
+        "approval": 4
+      },
+      "validation_dimensions": {
+        "consistency": {
+          "expected": false,
+          "merged_items": 1,
+          "pass": true
+        },
+        "conflict": {
+          "expected": false,
+          "needs_review_or_conflict": 3,
+          "pass": true
+        },
+        "blocker_lifecycle": {
+          "expected": true,
+          "blocker_statuses": {
+            "resolved": 3,
+            "waiting_external": 2,
+            "open": 1
+          },
+          "pass": true
+        },
+        "blocker_propagation": {
+          "expected": true,
+          "checks": [
+            {
+              "origin_message_id": "chat_block_emerge",
+              "expected_status": "resolved",
+              "actual_status": "resolved",
+              "matched": true,
+              "pass": true
+            }
+          ],
+          "pass": true
+        },
+        "high_density": {
+          "expected": false,
+          "pass": true
+        }
+      },
+      "llm_calls": 0,
+      "llm_total_ms": 0,
+      "skipped_hybrid_only_count": 0,
+      "mode_label": "rule"
+    },
+    {
+      "dataset": "multi_source_natural",
+      "status": "OK",
+      "events_in": 20,
+      "memories_out": 17,
+      "history_out": 1,
+      "density_ratio": 0.85,
+      "elapsed_ms": 16,
+      "by_state_type": {
+        "deferred": 5,
+        "next_step": 4,
+        "decision": 4,
+        "deadline": 1,
+        "blocker": 3,
+        "member_status": 1
+      },
+      "by_source_type": {
+        "chat": 6,
+        "doc_comment": 3,
+        "task": 5,
+        "meeting": 6,
+        "approval": 3
+      },
+      "cross_source_merged_count": 3,
+      "needs_review_count": 3,
+      "strict_recall": "100%",
+      "expected_count": 9,
+      "matched_count": 9,
+      "missed_count": 0,
+      "missed_expected": [],
+      "per_source_recall": {
+        "approval": {
+          "expected": 2,
+          "matched": 2,
+          "recall": "100%"
+        },
+        "chat": {
+          "expected": 3,
+          "matched": 3,
+          "recall": "100%"
+        },
+        "doc_comment": {
+          "expected": 1,
+          "matched": 1,
+          "recall": "100%"
+        },
+        "meeting": {
+          "expected": 2,
+          "matched": 2,
+          "recall": "100%"
+        },
+        "task": {
+          "expected": 1,
+          "matched": 1,
+          "recall": "100%"
+        }
+      },
+      "per_state_recall": {
+        "blocker": {
+          "expected": 2,
+          "matched": 2,
+          "recall": "100%"
+        },
+        "decision": {
+          "expected": 2,
+          "matched": 2,
+          "recall": "100%"
+        },
+        "deferred": {
+          "expected": 1,
+          "matched": 1,
+          "recall": "100%"
+        },
+        "member_status": {
+          "expected": 1,
+          "matched": 1,
+          "recall": "100%"
+        },
+        "next_step": {
+          "expected": 3,
+          "matched": 3,
+          "recall": "100%"
+        }
+      },
+      "actual_state_types": [
+        "blocker",
+        "deadline",
+        "decision",
+        "deferred",
+        "member_status",
+        "next_step"
+      ],
+      "expected_source_distribution": {
+        "chat": 10,
+        "doc_comment": 4,
+        "task": 2,
+        "meeting": 2,
+        "approval": 2
+      },
+      "validation_dimensions": {
+        "consistency": {
+          "expected": false,
+          "merged_items": 3,
+          "pass": true
+        },
+        "conflict": {
+          "expected": false,
+          "needs_review_or_conflict": 3,
+          "pass": true
+        },
+        "blocker_lifecycle": {
+          "expected": false,
+          "blocker_statuses": {
+            "open": 1,
+            "waiting_external": 1,
+            "resolved": 1
+          },
+          "pass": true
+        },
+        "blocker_propagation": {
+          "expected": true,
+          "checks": [
+            {
+              "origin_message_id": "chat_n2_003",
+              "expected_status": "resolved",
+              "actual_status": "open",
+              "matched": true,
+              "pass": false
+            }
+          ],
+          "pass": false
+        },
+        "high_density": {
+          "expected": false,
+          "pass": true
+        }
+      },
+      "llm_calls": 0,
+      "llm_total_ms": 0,
+      "skipped_hybrid_only_count": 5,
+      "mode_label": "rule"
+    },
+    {
+      "dataset": "multi_source_doc_long",
+      "status": "OK",
+      "events_in": 19,
+      "memories_out": 21,
+      "history_out": 0,
+      "density_ratio": 1.11,
+      "elapsed_ms": 22,
+      "by_state_type": {
+        "next_step": 2,
+        "project_goal": 1,
+        "deadline": 1,
+        "owner": 7,
+        "decision": 4,
+        "blocker": 5,
+        "deferred": 1
+      },
+      "by_source_type": {
+        "doc": 21
+      },
+      "cross_source_merged_count": 0,
+      "needs_review_count": 4,
+      "strict_recall": "100%",
+      "expected_count": 12,
+      "matched_count": 12,
+      "missed_count": 0,
+      "missed_expected": [],
+      "per_source_recall": {
+        "doc": {
+          "expected": 12,
+          "matched": 12,
+          "recall": "100%"
+        }
+      },
+      "per_state_recall": {
+        "blocker": {
+          "expected": 1,
+          "matched": 1,
+          "recall": "100%"
+        },
+        "deadline": {
+          "expected": 1,
+          "matched": 1,
+          "recall": "100%"
+        },
+        "decision": {
+          "expected": 2,
+          "matched": 2,
+          "recall": "100%"
+        },
+        "deferred": {
+          "expected": 1,
+          "matched": 1,
+          "recall": "100%"
+        },
+        "next_step": {
+          "expected": 2,
+          "matched": 2,
+          "recall": "100%"
+        },
+        "owner": {
+          "expected": 4,
+          "matched": 4,
+          "recall": "100%"
+        },
+        "project_goal": {
+          "expected": 1,
+          "matched": 1,
+          "recall": "100%"
+        }
+      },
+      "actual_state_types": [
+        "blocker",
+        "deadline",
+        "decision",
+        "deferred",
+        "next_step",
+        "owner",
+        "project_goal"
+      ],
+      "expected_source_distribution": {
+        "doc": 1
+      },
+      "validation_dimensions": {
+        "consistency": {
+          "expected": false,
+          "merged_items": 0,
+          "pass": true
+        },
+        "conflict": {
+          "expected": false,
+          "needs_review_or_conflict": 4,
+          "pass": true
+        },
+        "blocker_lifecycle": {
+          "expected": false,
+          "blocker_statuses": {
+            "open": 5
+          },
+          "pass": true
+        },
+        "blocker_propagation": {
+          "expected": false,
+          "checks": [],
+          "pass": true
+        },
+        "high_density": {
+          "expected": true,
+          "pass": true
+        }
+      },
+      "llm_calls": 0,
+      "llm_total_ms": 0,
+      "skipped_hybrid_only_count": 0,
+      "mode_label": "rule"
+    },
+    {
+      "dataset": "multi_source_approval_realistic",
+      "status": "OK",
+      "events_in": 4,
+      "memories_out": 6,
+      "history_out": 0,
+      "density_ratio": 1.5,
+      "elapsed_ms": 5,
+      "by_state_type": {
+        "blocker": 4,
+        "decision": 2
+      },
+      "by_source_type": {
+        "approval": 6,
+        "chat": 1
+      },
+      "cross_source_merged_count": 1,
+      "needs_review_count": 3,
+      "strict_recall": "100%",
+      "expected_count": 5,
+      "matched_count": 5,
+      "missed_count": 0,
+      "missed_expected": [],
+      "per_source_recall": {
+        "approval": {
+          "expected": 4,
+          "matched": 4,
+          "recall": "100%"
+        },
+        "chat": {
+          "expected": 1,
+          "matched": 1,
+          "recall": "100%"
+        }
+      },
+      "per_state_recall": {
+        "blocker": {
+          "expected": 3,
+          "matched": 3,
+          "recall": "100%"
+        },
+        "decision": {
+          "expected": 2,
+          "matched": 2,
+          "recall": "100%"
+        }
+      },
+      "actual_state_types": [
+        "blocker",
+        "decision"
+      ],
+      "expected_source_distribution": {
+        "chat": 1,
+        "approval": 3
+      },
+      "validation_dimensions": {
+        "consistency": {
+          "expected": false,
+          "merged_items": 1,
+          "pass": true
+        },
+        "conflict": {
+          "expected": false,
+          "needs_review_or_conflict": 3,
+          "pass": true
+        },
+        "blocker_lifecycle": {
+          "expected": true,
+          "blocker_statuses": {
+            "resolved": 2,
+            "waiting_external": 1,
+            "open": 1
+          },
+          "pass": true
+        },
+        "blocker_propagation": {
+          "expected": false,
+          "checks": [],
+          "pass": true
+        },
+        "high_density": {
+          "expected": false,
+          "pass": true
+        }
+      },
+      "llm_calls": 0,
+      "llm_total_ms": 0,
+      "skipped_hybrid_only_count": 0,
+      "mode_label": "rule"
+    },
+    {
+      "dataset": "multi_source_fixture_aurora",
+      "status": "OK",
+      "mode": "fixture",
+      "events_in": 0,
+      "memories_out": 19,
+      "history_out": 1,
+      "density_ratio": 0.0,
+      "elapsed_ms": 49,
+      "by_state_type": {
+        "project_goal": 1,
+        "deadline": 1,
+        "owner": 7,
+        "decision": 3,
+        "blocker": 3,
+        "next_step": 5
+      },
+      "by_source_type": {},
+      "cross_source_merged_count": 6,
+      "needs_review_count": 4,
+      "strict_recall": "100%",
+      "expected_count": 15,
+      "matched_count": 15,
+      "missed_count": 0,
+      "missed_expected": [],
+      "per_source_recall": {
+        "approval": {
+          "expected": 2,
+          "matched": 2,
+          "recall": "100%"
+        },
+        "calendar": {
+          "expected": 1,
+          "matched": 1,
+          "recall": "100%"
+        },
+        "doc": {
+          "expected": 6,
+          "matched": 6,
+          "recall": "100%"
+        },
+        "doc_comment": {
+          "expected": 1,
+          "matched": 1,
+          "recall": "100%"
+        },
+        "meeting": {
+          "expected": 3,
+          "matched": 3,
+          "recall": "100%"
+        },
+        "task": {
+          "expected": 2,
+          "matched": 2,
+          "recall": "100%"
+        }
+      },
+      "per_state_recall": {
+        "blocker": {
+          "expected": 2,
+          "matched": 2,
+          "recall": "100%"
+        },
+        "deadline": {
+          "expected": 1,
+          "matched": 1,
+          "recall": "100%"
+        },
+        "decision": {
+          "expected": 3,
+          "matched": 3,
+          "recall": "100%"
+        },
+        "next_step": {
+          "expected": 5,
+          "matched": 5,
+          "recall": "100%"
+        },
+        "owner": {
+          "expected": 3,
+          "matched": 3,
+          "recall": "100%"
+        },
+        "project_goal": {
+          "expected": 1,
+          "matched": 1,
+          "recall": "100%"
+        }
+      },
+      "actual_state_types": [
+        "blocker",
+        "deadline",
+        "decision",
+        "next_step",
+        "owner",
+        "project_goal"
+      ],
+      "blocker_statuses": {
+        "resolved": 2,
+        "waiting_external": 1
+      },
+      "validation_dimensions": {
+        "consistency": {
+          "expected": false,
+          "merged_items": 6,
+          "pass": true
+        },
+        "conflict": {
+          "expected": false,
+          "needs_review_or_conflict": 4,
+          "pass": true
+        },
+        "blocker_lifecycle": {
+          "expected": true,
+          "blocker_statuses": {
+            "resolved": 2,
+            "waiting_external": 1
+          },
+          "pass": true
+        },
+        "blocker_propagation": {
+          "expected": false,
+          "checks": [],
+          "pass": true
+        },
+        "high_density": {
+          "expected": false,
+          "pass": true
+        }
+      },
+      "llm_calls": 0,
+      "llm_total_ms": 0,
+      "skipped_hybrid_only_count": 0,
+      "mode_label": "rule"
+    }
+  ]
+}
