@@ -492,19 +492,16 @@ class RuleBasedExtractor(BaseExtractor):
                       "啥意思", "什么意思", "是什么", "在哪里")
 
     # 口语化弱信号（不精确，但有协作可能 → LLM）
-    _COLLOQUIAL_WEAK = frozenset({"弄一下", "搞一下", "看一下", "整一下", "弄弄", "搞搞",
-                                   "看看", "瞅瞅", "试试", "试一下", "弄完", "搞完"})
-
     # V1.17: 精确信号（格式固定，规则可直接提取）
     _PRECISE_SIGNALS = frozenset({
         "负责人", "负责", "owner",
         "就这么定了", "最终方案", "敲定", "正式决定",
-        "阻塞了", "卡住了",
+        "阻塞了", "卡住了", "卡住",
         "下一步", "待办", "TODO",
-        "DDL", "截止日期", "deadline",
+        "DDL", "截止日期", "截止", "deadline",
         "暂缓", "先不做", "搁置",
-        "目标是", "goal",
-        "请假", "出差", "休假", "不在公司",
+        "目标是", "目标", "goal",
+        "请假", "出差", "休假", "不在公司", "习惯用", "擅长",
         "分工",  # 分工：XXX负责YYY — 格式固定
     })
 
@@ -550,27 +547,6 @@ class RuleBasedExtractor(BaseExtractor):
         """极简回复 → 跳过（仅白名单，不按长度）。"""
         return text.strip() in RuleBasedExtractor._TRIVIAL
 
-    @staticmethod
-    def _has_any_signal(text: str) -> bool:
-        """检测是否包含任何协作信号（含隐式）。"""
-        _all_keywords = (
-            "负责", "负责人", "owner", "目标", "goal",
-            "决策", "决定", "确定", "采用", "改为", "不再", "换成", "改成", "改用",
-            "考虑", "觉得", "倾向于", "建议", "推荐",  # 模糊决策信号
-            "阻塞", "卡住", "风险", "依赖",
-            "下一步", "待办", "todo", "需要", "请",
-            "DDL", "截止", "deadline", "延期", "改到", "调到",
-            "暂缓", "暂停", "先不", "搁置",
-            "请假", "不在", "休假", "出差",
-            "在弄", "在做", "在搞", "在写", "还没好", "来不及",
-            "分工", "由",  # owner 信号
-            "我来", "他来", "她来", "那就", "那先", "先做",  # 隐式信号
-            "没给", "没出", "没回复", "打算", "要不要",  # 隐式信号续
-            "搞定", "弄完", "搞完", "准备用", "准备做",  # 隐式信号续
-        )
-        lowered = text.lower()
-        return any(kw in lowered for kw in _all_keywords)
-
     def extract(self, events: Iterable[dict]) -> list[MemoryItem]:
         """V1.17: Selector模式——有把握才提取，没把握加入 delegate_list。
 
@@ -593,42 +569,22 @@ class RuleBasedExtractor(BaseExtractor):
             if str(event.get("source_type", "")) == "calendar":
                 items.extend(self._extract_calendar_source(event, text))
 
-            has_signal = self._has_any_signal(text)
-
-            # V1.17 selector mode: 决策矩阵（仅 Hybrid 模式生效）
+            # V1.19 selector mode: 规则先提取，仅对真正不确定的场景 delegate LLM
             if self.selector_mode:
                 if self._is_trivial(text):
                     continue
-                has_precise = self._has_precise_signal(text)
-                has_fuzzy = self._has_fuzzy_signal(text)
-                has_any = has_precise or has_fuzzy
+                has_any = self._has_precise_signal(text) or self._has_fuzzy_signal(text)
                 has_uncertain = self._has_uncertainty(text)
                 has_neg = self._has_negation(text)
 
                 # 纯问题 → 跳过
                 if has_uncertain and text.startswith(self._PURE_QUESTION):
                     continue
-                # 强不确定 + 有信号 → delegate
-                if has_uncertain and has_any:
-                    self._delegate_list.append(event)
-                    continue
-                # 否定 + 有信号 → delegate
-                if has_neg and has_any:
-                    self._delegate_list.append(event)
-                    continue
-                # 仅模糊信号（无精确）→ delegate
-                if has_fuzzy and not has_precise:
-                    self._delegate_list.append(event)
-                    continue
-                # 口语化弱信号 → delegate
-                if any(w in text for w in self._COLLOQUIAL_WEAK) and has_any:
-                    self._delegate_list.append(event)
-                    continue
                 # 无任何信号 → 跳过
                 if not has_any:
                     continue
 
-            # 提取
+            # 提取（selector 和非 selector 都走这里）
             before_count = len(items)
             items.extend(self._extract_goal(event, text))
             items.extend(self._extract_owner(event, text))
@@ -641,9 +597,41 @@ class RuleBasedExtractor(BaseExtractor):
             if str(event.get("source_type", "")) == "meeting":
                 items.extend(self._extract_meeting_action_items(event, text))
 
-            # V1.17: selector模式下，有信号但规则未提取 → delegate
-            if self.selector_mode and len(items) == before_count and has_signal:
-                self._delegate_list.append(event)
+            new_count = len(items) - before_count
+            new_event_items = items[before_count:]
+
+            # V1.19: 5-signal delegate check — 仅 selector 模式
+            if self.selector_mode:
+                should_delegate = False
+
+                # Signal 1: 否定 + 有信号 → 规则可能反向理解，需 LLM
+                if has_neg and has_any:
+                    should_delegate = True
+                # Signal 2: 不确定语气 + 有信号 → 非确定陈述
+                elif has_uncertain and has_any:
+                    should_delegate = True
+                # Signal 3: 同类型多个候选 → 规则矛盾，需 LLM 裁决
+                elif new_count >= 1:
+                    new_types = [i.state_type for i in new_event_items]
+                    if len(new_types) != len(set(new_types)):
+                        should_delegate = True
+                # Signal 4: 规则空但消息非琐碎且有信号 → 隐式表达
+                elif new_count == 0 and has_any:
+                    should_delegate = True
+                # Signal 5: 互补缺失 — 有 owner 无 goal，有 blocker 无 next_step
+                elif new_count >= 1:
+                    new_types = {i.state_type for i in new_event_items}
+                    if "owner" in new_types and "project_goal" not in new_types:
+                        all_types = {i.state_type for i in items}
+                        if "project_goal" not in all_types:
+                            should_delegate = True
+                    if "blocker" in new_types and "next_step" not in new_types:
+                        all_types = {i.state_type for i in items}
+                        if "next_step" not in all_types:
+                            should_delegate = True
+
+                if should_delegate:
+                    self._delegate_list.append(event)
         return items
 
     def _event_text(self, event: dict) -> str:
@@ -711,7 +699,9 @@ class RuleBasedExtractor(BaseExtractor):
         seen_pattern1: set[str] = set()
         for m in re.finditer(
             r"(?:负责人|owner)\s*(?:[:：]|\s+(?:改成|改为|换成|转给))\s*"
-            r"([A-Za-z0-9_\-一-鿿]{1,20})",
+            r"([A-Za-z0-9_\-一-鿿]{1,20})"
+            r"(?=\s*(?:负责|owner|做|处理|开发|测试|实现|设计|修改|跟进|对接|完成|"
+            r"编写|优化|，|。|！|$|—|–|-))",
             text,
         ):
             candidate = m.group(1)
@@ -965,23 +955,7 @@ class RuleBasedExtractor(BaseExtractor):
         if "不依赖" in text or "依赖注入" in text:
             return []
         if any(s in text for s in self._BLOCKER_RESOLVE_SIGNALS):
-            item = self._base_item(
-                event, text, "blocker", self._hash_key(text), text,
-                "Message indicates a blocker has been resolved.", 0.72,
-            )
-            sender = event.get("sender", {}) or {}
-            resolved_by = str(sender.get("name", sender.get("id", ""))) if isinstance(sender, dict) else ""
-            item.metadata = {
-                "blocker_status": "resolved",
-                "blocking_reason": text[:200].replace("\x00", "").replace("\r", " "),
-                "blocked_owner": "",
-                "dependency_owner": "",
-                "acknowledged_by": "",
-                "resolved_by": resolved_by,
-                "resolved_at": str(event.get("created_at", "")),
-                "blocked_item": "",
-            }
-            return [item]
+            return []  # 阻塞已解除的消息不提取为新阻塞
         item = self._base_item(
             event, text, "blocker", self._hash_key(text), text,
             "Message identifies a blocker, risk, or dependency.", 0.7,

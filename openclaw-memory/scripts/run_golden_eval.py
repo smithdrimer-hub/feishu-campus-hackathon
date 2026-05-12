@@ -79,7 +79,7 @@ def eval_case(sample: dict, extractor_name: str = "rule") -> dict:
     case_id = sample["case_id"]
     scenario_type = sample["scenario_type"]
     uses_llm = extractor_name in ("hybrid", "llm")
-    if uses_llm and "llm_expected_items" in sample:
+    if uses_llm and sample.get("llm_expected_items"):
         expected_items = sample.get("llm_expected_items", [])
         expected_history = sample.get("llm_expected_history", sample.get("expected_history", []))
         should_not_extract = sample.get("llm_should_not_extract", sample.get("should_not_extract", []))
@@ -113,12 +113,12 @@ def eval_case(sample: dict, extractor_name: str = "rule") -> dict:
         extractor = RuleBasedExtractor()
 
     with TemporaryDirectory() as tmpdir:
-        store = MemoryStore(Path(tmpdir))
-        engine = MemoryEngine(store, extractor)
-        engine.ingest_events(sample["input_events"])
+        with MemoryStore(Path(tmpdir)) as store:
+            engine = MemoryEngine(store, extractor)
+            engine.ingest_events(sample["input_events"])
 
-        active = store.list_items()
-        history = store.list_history()
+            active = store.list_items()
+            history = store.list_history()
 
     errors: list[str] = []
 
@@ -196,7 +196,7 @@ def eval_case(sample: dict, extractor_name: str = "rule") -> dict:
 
 def _expected_types_from_sample(sample: dict, extractor_name: str) -> set[str]:
     """Extract the set of state_types expected in this sample."""
-    if extractor_name in ("hybrid", "llm") and "llm_expected_items" in sample:
+    if extractor_name in ("hybrid", "llm") and sample.get("llm_expected_items"):
         items = sample.get("llm_expected_items", [])
     else:
         items = sample.get("expected_items", [])
@@ -285,6 +285,8 @@ def main():
                         help="Run all modes and show comparison: rule_only vs hybrid vs llm")
     parser.add_argument("--report", default=None,
                         help="Save structured report JSON to path")
+    parser.add_argument("--batch", default=None,
+                        help="Run a subset: N/M (e.g. '1/5' for first 20%%) to avoid timeout")
     args = parser.parse_args()
 
     golden_path = Path(args.golden_set)
@@ -293,9 +295,19 @@ def main():
         sys.exit(1)
 
     samples = load_golden_set(golden_path)
+    if args.batch:
+        parts = args.batch.split("/")
+        if len(parts) == 2:
+            batch_n, batch_m = int(parts[0]), int(parts[1])
+            batch_size = max(1, len(samples) // batch_m)
+            start = (batch_n - 1) * batch_size
+            end = start + batch_size if batch_n < batch_m else len(samples)
+            samples = samples[start:end]
+            print(f"\nBatch {batch_n}/{batch_m}: cases {start+1}-{min(end,len(samples))} "
+                  f"({len(samples)} cases)")
     if args.scenario:
         samples = [s for s in samples if s.get("scenario_type") == args.scenario]
-        print(f"\nFiltered to scenario: {args.scenario} ({len(samples)} cases)")
+        print(f"Filtered to scenario: {args.scenario} ({len(samples)} cases)")
 
     if args.compare:
         extractors_to_run = ["rule", "hybrid", "llm"]
@@ -324,7 +336,7 @@ def main():
 
         # 输出失败案例详情
         failed_cases = [r for r in all_results if not r["pass"]]
-        if failed_cases and args.verbose:
+        if failed_cases:
             llm_conf_errors = [r for r in failed_cases if "not configured" in str(r.get("errors", []))]
             if llm_conf_errors:
                 print("  [LLM not configured — set OPENAI_API_KEY or create config.local.yaml]")

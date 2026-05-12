@@ -31,15 +31,44 @@ class MemoryStore:
         """
         self.data_dir = Path(data_dir)
         if backend is None:
-            backend = self._resolve_backend()
+            backend = self._resolve_backend(self.data_dir)
         self._backend = backend
         # 向后兼容：保留路径属性（JSON 后端使用）
         self.raw_events_path = self.data_dir / "raw_events.jsonl"
         self.memory_state_path = self.data_dir / "memory_state.json"
         self.audit_path = self.data_dir / "audit.jsonl"
 
+    @property
+    def backend(self):
+        """返回当前使用的 StorageBackend（可能为 None，表示使用内置 JSON 存储）。"""
+        return self._backend
+
+    def close(self) -> None:
+        """V1.19: 关闭后端连接（测试清理使用）。"""
+        if self._backend is not None and hasattr(self._backend, "close"):
+            self._backend.close()
+            self._backend = None
+
+    def __enter__(self) -> "MemoryStore":
+        """V1.19: 上下文管理器入口，支持 with MemoryStore(tmp) as store: 模式。"""
+        return self
+
+    def __exit__(self, *args) -> None:
+        """V1.19: 上下文管理器出口，自动关闭后端连接。"""
+        self.close()
+        return False
+
+    def __del__(self) -> None:
+        """确保后端连接在垃圾回收时关闭。"""
+        try:
+            self.close()
+        except Exception:
+            import logging
+            logging.getLogger(__name__).warning(
+                "MemoryStore.__del__: close() failed, backend may leak")
+
     @staticmethod
-    def _resolve_backend():
+    def _resolve_backend(data_dir: str | Path):
         """V1.19: 根据 config 选择存储后端，默认 JSON。"""
         try:
             from config import get_config
@@ -48,15 +77,12 @@ class MemoryStore:
                 from memory.store_sqlite import SQLiteStorageBackend
                 import logging
                 logging.getLogger(__name__).info("Using SQLite storage backend")
-                return SQLiteStorageBackend("data")
-        except Exception:
-            pass
+                return SQLiteStorageBackend(Path(data_dir))
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Failed to load SQLite backend (falling back to JSON): %s", e)
         return None  # None = 使用内置 JSON 存储
-
-    @property
-    def backend(self):
-        """返回当前使用的 StorageBackend（可能为 None，表示使用内置 JSON 存储）。"""
-        return self._backend
 
     # ── V1.12 审计日志 ──────────────────────────────────────────
 
@@ -1227,7 +1253,7 @@ class MemoryStore:
             old_topic = self._ensure_canonical_topic(existing)
             old_tokens = self._topic_tokens_for_item(existing)
             shared_key = bool(old_topic and old_topic == new_topic)
-            shared_overlap = self._topic_token_overlap(new_tokens, old_tokens) >= 2
+            shared_overlap = self._topic_token_overlap(new_tokens, old_tokens) >= 3
             if not (shared_key or shared_overlap):
                 continue
             # Cross-source evidence merge requires the new item to bring at

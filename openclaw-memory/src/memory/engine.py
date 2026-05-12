@@ -110,6 +110,9 @@ class MemoryEngine:
         if not events:
             return self.store.list_items(project_id)
 
+        # V1.19 P1-A fix: engine 内部统一 normalize，确保非文本消息不走 pipeline 也生成占位
+        events = self._normalize_events(events)
+
         new_items = self.extractor.extract(events)
         processed_ids = [raw_event_id(event) for event in events]
 
@@ -841,6 +844,42 @@ class MemoryEngine:
             self.store.save_state(items, history, processed)
 
         return updated
+
+    @staticmethod
+    def _normalize_events(events: list[dict]) -> list[dict]:
+        """V1.19 P1-A fix: 统一 normalize，确保非文本消息生成占位文本。
+
+        对 text 外的 msg_type 调用 MessageParser，在 engine 内部消除静默丢弃。
+        已带有 parser 产物的 event（从 pipeline 的 _normalize_event 来）不会重复处理。
+        """
+        from memory.message_parser import get_parser
+        parser = get_parser()
+        out = []
+        for ev in events:
+            msg_type = ev.get("msg_type", "text")
+            if msg_type == "text":
+                out.append(ev)
+                continue
+            # 如果已经在 pipeline 层 normalize 过，跳过
+            if ev.get("media_refs") or ev.get("has_unsupported_media"):
+                out.append(ev)
+                continue
+            content = ev.get("content", "") or ev.get("text", "")
+            parsed = parser.parse_content(str(content), str(msg_type))
+            ev = dict(ev)
+            if parsed.text:
+                ev["text"] = parsed.text
+                ev["content"] = parsed.text
+            if parsed.media_refs:
+                ev["media_refs"] = parsed.media_refs
+            if parsed.has_unsupported_media:
+                ev["has_unsupported_media"] = True
+            if parsed.mentions:
+                ev["at_list"] = parsed.mentions
+            if parsed.links:
+                ev["links"] = parsed.links
+            out.append(ev)
+        return out
 
     def _should_process_now(self, project_id: str | None) -> tuple[bool, str]:
         """Check if extraction should proceed based on debounce timing.
