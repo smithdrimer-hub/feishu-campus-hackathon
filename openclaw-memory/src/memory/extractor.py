@@ -1172,8 +1172,14 @@ class RuleBasedExtractor(BaseExtractor):
         if not owner:
             sender = event.get("sender", {}) or {}
             if isinstance(sender, dict):
-                owner = self._normalise_person_name(
-                    str(sender.get("name", sender.get("id", "")))) or None
+                raw = str(sender.get("name", sender.get("id", "")))
+                # 拒绝包含非人名 token 的 sender（如 "任务负责人"）
+                raw_ok = (
+                    raw and self._is_valid_person_name(raw)
+                    and not any(t in raw for t in self._OWNER_NON_PERSON_TOKENS)
+                )
+                if raw_ok:
+                    owner = self._normalise_person_name(raw) or None
 
         return [
             self._base_item(
@@ -1292,7 +1298,11 @@ class RuleBasedExtractor(BaseExtractor):
         owner = None
         if isinstance(sender, dict):
             raw = str(sender.get("name", sender.get("id", "")))
-            if raw:
+            raw_ok = (
+                raw and self._is_valid_person_name(raw)
+                and not any(t in raw for t in self._OWNER_NON_PERSON_TOKENS)
+            )
+            if raw_ok:
                 owner = self._normalise_person_name(raw) or None
         return [
             self._base_item(
