@@ -40,6 +40,8 @@ class TestE2EFullPipeline(unittest.TestCase):
         self.engine = MemoryEngine(self.store, RuleBasedExtractor())
 
     def tearDown(self):
+        if hasattr(self, 'store'):
+            self.store.close()
         self.temp_dir.cleanup()
 
     def _make_event(self, text, message_id, created_at="2026-04-28T10:00:00",
@@ -215,6 +217,7 @@ class TestE2EFullPipeline(unittest.TestCase):
             ]
             engine.ingest_events(events)
             items = store.list_items("e2e-test")
+            store.close()
 
             # FakeLLMProvider returns fixed payload (scenario_01_payload)
             # But events have project_id="e2e-test", not "openclaw-memory-demo"
@@ -314,7 +317,10 @@ class TestE2EGoldenSetIntegration(unittest.TestCase):
     """
 
     def test_all_golden_cases_ingest_without_error(self):
-        """All 150 golden set cases should ingest without errors."""
+        """All 150 golden set cases: ingest + extraction quality verification.
+
+        V1.19: 重用单个临时目录跑 150 case，避免重复创建销毁。
+        """
         golden_path = ROOT / "examples" / "golden_set.jsonl"
         self.assertTrue(golden_path.exists(), "Golden set file must exist")
 
@@ -329,28 +335,49 @@ class TestE2EGoldenSetIntegration(unittest.TestCase):
                                 "Golden set should have 150+ cases")
 
         errors = []
-        for sample in samples:
-            case_id = sample["case_id"]
-            with self.subTest(case_id=case_id):
-                try:
-                    with TemporaryDirectory() as tmp:
-                        store = MemoryStore(Path(tmp))
-                        engine = MemoryEngine(store, RuleBasedExtractor())
-                        engine.ingest_events(sample["input_events"])
-                        items = store.list_items()
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            for sample in samples:
+                case_id = sample["case_id"]
+                with self.subTest(case_id=case_id):
+                    try:
+                        # 每个 case 使用独立 store，避免状态污染
+                        case_dir = tmp_path / case_id
+                        case_dir.mkdir()
+                        with MemoryStore(case_dir) as store:
+                            engine = MemoryEngine(store, RuleBasedExtractor())
+                            engine.ingest_events(sample["input_events"])
+                            items = store.list_items()
 
-                        # Verify processed_event_ids exist
-                        processed = store.processed_event_ids()
-                        expected_ids = [e["message_id"] for e in sample["input_events"]]
-                        for eid in expected_ids:
-                            self.assertIn(eid, processed,
-                                          f"{case_id}: {eid} should be marked processed")
+                            expected_items = sample.get("expected_items", [])
+                            extracted_types = {i.state_type for i in items}
+                            for exp in expected_items:
+                                exp_type = exp.get("state_type", "")
+                                if exp_type:
+                                    self.assertIn(
+                                        exp_type, extracted_types,
+                                        f"{case_id}: expected state_type={exp_type} "
+                                        f"not found in extracted types {extracted_types}"
+                                    )
 
-                        # Verify handoff doesn't crash
-                        handoff = generate_handoff("golden", items)
-                        self.assertIsInstance(handoff, str)
-                except Exception as e:
-                    errors.append(f"{case_id}: {e}")
+                            forbidden = set(sample.get("should_not_extract", []))
+                            if forbidden:
+                                overlap = forbidden & extracted_types
+                                self.assertEqual(
+                                    len(overlap), 0,
+                                    f"{case_id}: should NOT extract {overlap} but found in active"
+                                )
+
+                            processed = store.processed_event_ids()
+                            expected_ids = [e["message_id"] for e in sample["input_events"]]
+                            for eid in expected_ids:
+                                self.assertIn(eid, processed,
+                                              f"{case_id}: {eid} should be marked processed")
+
+                            handoff = generate_handoff("golden", items)
+                            self.assertIsInstance(handoff, str)
+                    except Exception as e:
+                        errors.append(f"{case_id}: {e}")
 
         if errors:
             self.fail(f"{len(errors)} cases had errors:\n" + "\n".join(errors[:5]))
