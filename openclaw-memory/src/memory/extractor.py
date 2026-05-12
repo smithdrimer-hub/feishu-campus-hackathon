@@ -954,6 +954,16 @@ class RuleBasedExtractor(BaseExtractor):
             "跑不动", "等他们", "等它", "还没扩完",
         )):
             return []
+        # 过滤站会开场白/回顾性提问 —— "卡住的事"是回顾不是新阻塞
+        _standup_opener_signals = (
+            "卡住的事", "卡住的事情", "说一下进度", "汇报一下",
+            "同步一下", "过一下", "对齐一下",
+        )
+        if any(s in text for s in _standup_opener_signals):
+            return []
+        # "不依赖" = 绕过依赖，不是报告阻塞；"依赖注入" = 技术术语
+        if "不依赖" in text or "依赖注入" in text:
+            return []
         if any(s in text for s in self._BLOCKER_RESOLVE_SIGNALS):
             item = self._base_item(
                 event, text, "blocker", self._hash_key(text), text,
@@ -980,6 +990,9 @@ class RuleBasedExtractor(BaseExtractor):
         sender = event.get("sender", {}) or {}
         if isinstance(sender, dict):
             sender_name = str(sender.get("name", sender.get("id", "")))
+        # 报阻塞的人默认就是被阻塞的人（除非文本中明确指出了其他人）
+        if not item.owner and sender_name:
+            item.owner = sender_name
         # V1.18: 清理元数据文本中的控制字符
         clean_text = text[:200].replace("\x00", "").replace("\r", " ")
         item.metadata = {
@@ -1182,6 +1195,11 @@ class RuleBasedExtractor(BaseExtractor):
             candidate = name_match.group(1)
             if self._is_valid_person_name(candidate):
                 owner = self._normalise_person_name(candidate)
+        if not owner:
+            sender = event.get("sender", {}) or {}
+            if isinstance(sender, dict):
+                owner = self._normalise_person_name(
+                    str(sender.get("name", sender.get("id", "")))) or None
 
         return [
             self._base_item(
@@ -1296,6 +1314,12 @@ class RuleBasedExtractor(BaseExtractor):
         if not has_explicit_keyword and not has_implicit_delivery_time:
             return []
         value = self._trim_deadline_value(text)
+        sender = event.get("sender", {}) or {}
+        owner = None
+        if isinstance(sender, dict):
+            raw = str(sender.get("name", sender.get("id", "")))
+            if raw:
+                owner = self._normalise_person_name(raw) or None
         return [
             self._base_item(
                 event,
@@ -1305,6 +1329,7 @@ class RuleBasedExtractor(BaseExtractor):
                 value,
                 "Message sets or changes a deadline or time constraint.",
                 0.68,
+                owner=owner,
             )
         ]
 

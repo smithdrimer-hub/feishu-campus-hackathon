@@ -925,35 +925,78 @@ def build_morning_briefing(
             return False
         return user_id in item.owner
 
+    def _item_event_time(item: MemoryItem) -> str:
+        """Best-effort original event time, falling back to recorded_at."""
+        if item.source_refs:
+            t = item.source_refs[0].created_at
+            if t:
+                return t
+        return item.recorded_at or item.updated_at or ""
+
     def _is_recent(item: MemoryItem) -> bool:
-        if not last_seen or not item.updated_at:
+        if not last_seen:
+            return False
+        event_time = _item_event_time(item)
+        if not event_time:
             return False
         try:
-            updated = datetime.fromisoformat(item.updated_at.replace("Z", "+00:00"))
-            return updated > last_seen
+            et = datetime.fromisoformat(event_time.replace("Z", "+00:00"))
+            return et > last_seen
         except (ValueError, TypeError):
             return False
 
-    # 1. Changes since last seen
+    # 1. Changes since last seen — show all state types, using original event time
     recent_changes = []
     if last_seen:
         for item in items_list:
-            if item.project_id == project_id and _is_recent(item):
-                recent_changes.append({
-                    "type": item.state_type,
-                    "value": item.current_value[:100],
-                    "sender": item.source_refs[0].sender_name if item.source_refs else None,
-                })
-
-    # 2. Waiting on you (others blocked by you / tasks assigned to you)
-    waiting_on_me = []
-    for item in by_type.get("next_step", []) + by_type.get("blocker", []):
-        if _is_mine(item):
-            waiting_on_me.append({
+            if item.project_id != project_id:
+                continue
+            if not _is_recent(item):
+                continue
+            recent_changes.append({
                 "type": item.state_type,
                 "value": item.current_value[:100],
-                "urgency": "high" if item.state_type == "blocker" else "normal",
+                "sender": item.source_refs[0].sender_name if item.source_refs else None,
             })
+
+    # 2. What needs your attention — split by direction
+    #    - blocking_others: you are someone's dependency_owner → unblock THEM (P0)
+    #    - my_tasks: next_step assigned to you → do YOUR work (P2)
+    #    - blocked_by_others: blocker where you ARE the owner → someone else
+    #      must unblock; you're waiting (P3 follow-up)
+    blocking_others = []
+    my_tasks = []
+    blocked_by_others = []
+    for item in items_list:
+        if item.project_id != project_id or item.status != "active":
+            continue
+        if item.state_type == "blocker":
+            meta = getattr(item, "metadata", None) or {}
+            dep_owner = meta.get("dependency_owner", "")
+            if dep_owner and user_id in dep_owner:
+                blocking_others.append(item)
+            elif _is_mine(item):
+                blocked_by_others.append(item)
+        elif item.state_type == "next_step":
+            if _is_mine(item):
+                my_tasks.append(item)
+
+    waiting_on_me = []
+    for b in blocking_others:
+        waiting_on_me.append({
+            "type": "blocker", "urgency": "high",
+            "value": f"需要你解阻塞: {b.current_value[:80]}（{b.owner or '?'} 在等你）",
+        })
+    for t in my_tasks:
+        waiting_on_me.append({
+            "type": "next_step", "urgency": "normal",
+            "value": t.current_value[:80],
+        })
+    for b in blocked_by_others:
+        waiting_on_me.append({
+            "type": "blocker", "urgency": "normal",
+            "value": f"你被阻塞: {b.current_value[:80]}",
+        })
 
     # 3. Upcoming deadlines
     deadlines = []
@@ -974,30 +1017,39 @@ def build_morning_briefing(
 
     # 5. Suggested actions (auto-prioritized)
     actions = []
-    for item in waiting_on_me:
-        if item["urgency"] == "high":
-            actions.append({
-                "priority": 1,
-                "action": f"解除阻塞：{item['value'][:60]}",
-                "reason": "有人被你阻塞，优先处理",
-            })
-    for item in waiting_on_me:
-        if item["urgency"] == "normal":
-            actions.append({
-                "priority": 2,
-                "action": f"完成任务：{item['value'][:60]}",
-                "reason": "分配给你的待办",
-            })
+    # P0: You are blocking others → unblock them NOW
+    for b in blocking_others:
+        actions.append({
+            "priority": 1,
+            "action": f"解除阻塞：{b.current_value[:60]}",
+            "reason": f"{b.owner or '有人'}在等你的输出",
+        })
+    # P1: Imminent deadlines
     if deadlines:
         actions.append({
             "priority": 1,
             "action": f"关注截止日：{deadlines[0]['value'][:40]}",
             "reason": "有临近的deadline",
         })
+    # P2: Your own tasks
+    for t in my_tasks:
+        actions.append({
+            "priority": 2,
+            "action": f"完成任务：{t.current_value[:60]}",
+            "reason": "分配给你的待办",
+        })
+    # P3: You are blocked → follow up, don't just wait
+    for b in blocked_by_others:
+        actions.append({
+            "priority": 3,
+            "action": f"推动解阻塞：{b.current_value[:60]}",
+            "reason": "你被此阻塞影响，建议主动确认进度",
+        })
+    # P4: New decisions while you were away
     for change in recent_changes[:3]:
         if change["type"] == "decision":
             actions.append({
-                "priority": 3,
+                "priority": 4,
                 "action": f"了解新决策：{change['value'][:40]}",
                 "reason": "你不在期间有新决策产生",
             })
