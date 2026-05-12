@@ -55,10 +55,16 @@ class AuthConfig:
 
 
 @dataclass(frozen=True)
+class StorageConfig:
+    backend: str = "json"  # "json" | "sqlite"
+
+
+@dataclass(frozen=True)
 class Config:
     llm: LLMConfig = field(default_factory=LLMConfig)
     embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
     auth: AuthConfig = field(default_factory=AuthConfig)
+    storage: StorageConfig = field(default_factory=StorageConfig)
     projects: list[dict[str, str]] = field(default_factory=list)
     auto_sync: dict[str, Any] = field(default_factory=dict)
     event_listener: dict[str, Any] = field(default_factory=dict)
@@ -126,6 +132,7 @@ def get_config(reload: bool = False) -> Config:
         "similarity_threshold": 0.35,
     }
     auth_data: dict[str, Any] = {"admins": [], "verify_chat_membership_before_write": False}
+    storage_data: dict[str, Any] = {"backend": "json"}
     top_data: dict[str, Any] = {}
 
     # Layer 2: config.yaml  (tracked in git — project settings)
@@ -139,13 +146,17 @@ def get_config(reload: bool = False) -> Config:
         emb_data = _merge_dicts(emb_data, local_raw["embedding"])
     if "auth" in local_raw:
         auth_data = _merge_dicts(auth_data, local_raw["auth"])
+    if "storage" in local_raw:
+        storage_data = _merge_dicts(storage_data, local_raw["storage"])
     # Merge non-secret top-level keys from local as well
-    for key in ("projects", "auto_sync", "event_listener", "demo", "auth"):
-        if key in local_raw and key != "auth":
+    for key in ("projects", "auto_sync", "event_listener", "demo", "auth", "storage"):
+        if key in local_raw and key not in ("auth", "storage"):
             top_data[key] = local_raw[key]
-    # auth from config.yaml also merges
+    # auth/storage from config.yaml also merges
     if "auth" in top_data:
         auth_data = _merge_dicts(auth_data, top_data["auth"])
+    if "storage" in top_data:
+        storage_data = _merge_dicts(storage_data, top_data["storage"])
 
     # Layer 4: environment variables (highest priority)
     env_api_key = os.environ.get("OPENCLAW_LLM_API_KEY")
@@ -165,10 +176,15 @@ def get_config(reload: bool = False) -> Config:
     if env_emb_url:
         emb_data["base_url"] = env_emb_url
 
+    env_storage = os.environ.get("OPENCLAW_STORAGE_BACKEND")
+    if env_storage:
+        storage_data["backend"] = env_storage
+
     _config_cache = Config(
         llm=LLMConfig(**{k: v for k, v in llm_data.items() if k in LLMConfig.__dataclass_fields__}),
         embedding=EmbeddingConfig(**{k: v for k, v in emb_data.items() if k in EmbeddingConfig.__dataclass_fields__}),
         auth=AuthConfig(**{k: v for k, v in auth_data.items() if k in AuthConfig.__dataclass_fields__}),
+        storage=StorageConfig(**{k: v for k, v in storage_data.items() if k in StorageConfig.__dataclass_fields__}),
         projects=top_data.get("projects", []),
         auto_sync=top_data.get("auto_sync", {}),
         event_listener=top_data.get("event_listener", {}),

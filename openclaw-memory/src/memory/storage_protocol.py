@@ -56,6 +56,21 @@ class StorageBackend(ABC):
         """标记事件 ID 为已处理。"""
         ...
 
+    # ── V1.19 P2: 查询下推（可选实现）────────────────────────────
+
+    def list_items(self, project_id: str | None = None,
+                   statuses: set[str] | None = None,
+                   as_of: str | None = None,
+                   user_id: str | None = None,
+                   limit: int = 0, offset: int = 0) -> list[dict] | None:
+        """后端级过滤查询。返回 None 表示委托 MemoryStore 在内存中过滤。"""
+        return None
+
+    def search_keywords(self, query: str, project_id: str | None = None,
+                        top_k: int = 10) -> list[dict] | None:
+        """后端级关键词搜索。返回 None 表示委托 MemoryStore 在内存中搜索。"""
+        return None
+
 
 class JsonStorageBackend(StorageBackend):
     """基于 JSON/JSONL 文件的默认存储后端。

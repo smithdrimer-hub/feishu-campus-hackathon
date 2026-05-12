@@ -27,14 +27,31 @@ class MemoryStore:
 
         Args:
             data_dir: 数据目录路径。
-            backend: 可选 StorageBackend 实例，为 None 时使用内置 JSON 文件存储。
+            backend: 可选 StorageBackend 实例。为 None 时根据 config 或默认 JSON。
         """
         self.data_dir = Path(data_dir)
+        if backend is None:
+            backend = self._resolve_backend()
+        self._backend = backend
+        # 向后兼容：保留路径属性（JSON 后端使用）
         self.raw_events_path = self.data_dir / "raw_events.jsonl"
         self.memory_state_path = self.data_dir / "memory_state.json"
         self.audit_path = self.data_dir / "audit.jsonl"
-        # V1.19: 可替换后端预留
-        self._backend = backend
+
+    @staticmethod
+    def _resolve_backend():
+        """V1.19: 根据 config 选择存储后端，默认 JSON。"""
+        try:
+            from config import get_config
+            cfg = get_config()
+            if cfg.storage.backend == "sqlite":
+                from memory.store_sqlite import SQLiteStorageBackend
+                import logging
+                logging.getLogger(__name__).info("Using SQLite storage backend")
+                return SQLiteStorageBackend("data")
+        except Exception:
+            pass
+        return None  # None = 使用内置 JSON 存储
 
     @property
     def backend(self):
@@ -80,6 +97,9 @@ class MemoryStore:
 
     def ensure_files(self) -> None:
         """Create data files when they do not already exist."""
+        if self._backend is not None:
+            self._backend.ensure_files()
+            return
         self.data_dir.mkdir(parents=True, exist_ok=True)
         if not self.raw_events_path.exists():
             self.raw_events_path.write_text("", encoding="utf-8")
@@ -88,6 +108,8 @@ class MemoryStore:
 
     def append_raw_events(self, events: Iterable[dict[str, Any]]) -> int:
         """Append new raw events and return the number written."""
+        if self._backend is not None:
+            return self._backend.append_raw_events(events)
         self.ensure_files()
         existing_ids = {raw_event_id(event) for event in self.read_raw_events()}
         written = 0
@@ -103,6 +125,11 @@ class MemoryStore:
 
     def read_raw_events(self, project_id: str | None = None) -> list[dict[str, Any]]:
         """Read raw events, optionally filtering by project_id."""
+        if self._backend is not None:
+            events = self._backend.read_raw_events()
+            if project_id is not None:
+                events = [e for e in events if e.get("project_id") == project_id]
+            return events
         if not self.raw_events_path.exists():
             return []
         events: list[dict[str, Any]] = []
@@ -115,15 +142,17 @@ class MemoryStore:
         return events
 
     def load_state(self) -> dict[str, Any]:
-        """Load memory_state.json and return the decoded state object.
+        """Load state from backend or JSON file.
 
-        V1.18: 损坏时自动从 .tmp 备份恢复。
+        V1.19 P2: 优先从后端加载。
         """
+        if self._backend is not None:
+            return self._backend.load_state()
+
         self.ensure_files()
         try:
             return json.loads(self.memory_state_path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
-            # 尝试从临时备份恢复
             tmp_path = self.memory_state_path.with_suffix(".json.tmp")
             if tmp_path.exists():
                 try:
@@ -134,7 +163,6 @@ class MemoryStore:
                     return state
                 except (json.JSONDecodeError, OSError):
                     pass
-            # 无法恢复，返回空状态
             return {"items": [], "history": [], "processed_event_ids": []}
 
     def save_state(
@@ -143,7 +171,14 @@ class MemoryStore:
         history: list[MemoryItem],
         processed_event_ids: list[str],
     ) -> None:
-        """Persist active items, historical items, and processed event ids."""
+        """Persist active items, historical items, and processed event ids.
+
+        V1.19 P2: 优先通过后端写入。
+        """
+        if self._backend is not None:
+            self._backend.save_state(items, history, processed_event_ids)
+            return
+
         self.data_dir.mkdir(parents=True, exist_ok=True)
         payload = {
             "items": [item.to_dict() for item in items],
@@ -181,12 +216,18 @@ class MemoryStore:
             (MemoryItem, score) 元组列表，按 score 降序排列。
             score 为正整数，越高表示匹配越充分。
         """
+        # V1.19 P2: 尝试后端 SQL 搜索
+        if self._backend is not None:
+            result = self._backend.search_keywords(query, project_id=project_id, top_k=top_k)
+            if result is not None:
+                items = [MemoryItem.from_dict(r) for r in result]
+                return [(item, 1.0) for item in items]  # SQL 搜索不区分分数
+
         items = self.list_items(project_id, as_of=as_of)
         if not query.strip():
             return [(item, 0.0) for item in items[:top_k]]
 
         # 分词：中文按字符 + 英文按空格
-        # 将中英文混合文本拆分为独立的搜索词
         tokens = self._tokenize_query(query)
 
         scored: list[tuple[MemoryItem, float, str]] = []
@@ -427,17 +468,9 @@ class MemoryStore:
                    include_corrected: bool = False) -> list[MemoryItem]:
         """Return active memory items, optionally filtered and paginated.
 
-        V1.12: 增加 user_id 参数。V1.13: 增加 limit/offset 分页。
-        V1.19 P0-C: 增加 include_expired/forgotten/corrected 参数供审计模式。
-                     默认只返回 status='active' 的记忆。
-
-        注意：当前实现全量加载 memory_state.json 后在内存中过滤。
-        单用户 CLI 场景下（< 10K 条记忆）够用。大规模部署需换 SQLite/PostgreSQL。
+        V1.19 P2: 优先委托后端做 SQL 过滤，后端不支持时回退内存过滤。
         """
-        state = self.load_state()
-        items = [MemoryItem.from_dict(item) for item in state.get("items", [])]
-
-        # 默认过滤：只保留 status='active'（向后兼容：旧的空 status 视为 active）
+        # 构建 status 集合
         active_statuses = {"active", ""}
         if include_expired:
             active_statuses.add("expired")
@@ -445,9 +478,21 @@ class MemoryStore:
             active_statuses.add("forgotten")
         if include_corrected:
             active_statuses.add("corrected")
+
+        # 尝试后端下推
+        if self._backend is not None:
+            result = self._backend.list_items(
+                project_id=project_id, statuses=active_statuses,
+                as_of=as_of, user_id=user_id, limit=limit, offset=offset,
+            )
+            if result is not None:
+                return [MemoryItem.from_dict(r) for r in result]
+
+        # 回退：内存过滤
+        state = self.load_state()
+        items = [MemoryItem.from_dict(item) for item in state.get("items", [])]
         items = [item for item in items if item.status in active_statuses]
 
-        # 如果请求了非 active 状态，也从 history 中拉取
         if include_expired or include_forgotten or include_corrected:
             history = [MemoryItem.from_dict(h) for h in state.get("history", [])]
             history = [h for h in history if h.status in active_statuses - {"active", ""}]

@@ -203,7 +203,26 @@ llm:
   model: "deepseek-chat"   # 非推理模型；推理模型会用 reasoning tokens 吃光输出
   temperature: 0.1
   max_tokens: 4000
+
+# 存储后端（默认 JSON，可选 sqlite）
+storage:
+  backend: "json"            # "json" | "sqlite"
 ```
+
+### 切换存储后端
+
+默认使用 JSON 文件存储。如需切换到 SQLite（支持更大数据量、更快查询），设置环境变量：
+
+```bash
+# SQLite 模式
+OPENCLAW_STORAGE_BACKEND=sqlite python scripts/unified_listener.py
+OPENCLAW_STORAGE_BACKEND=sqlite python scripts/demo_e2e_pipeline.py --chat-id oc_xxx
+
+# 切回 JSON（默认）
+python scripts/unified_listener.py
+```
+
+环境变量优先级高于 `config.yaml` 和 `config.local.yaml`，无需修改配置文件即可临时切换。
 
 ## AI Agent 闭环（12 秒端到端）
 

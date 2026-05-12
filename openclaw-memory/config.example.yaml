@@ -25,6 +25,10 @@ auth:
   admins: []                    # 管理员 open_id 列表（可查看其他用户数据）
   verify_chat_membership_before_write: false  # 发消息前验证 bot 在群内
 
+# 存储（默认 JSON 文件，可选 sqlite）
+storage:
+  backend: "json"               # "json" | "sqlite"
+
 # LLM 配置（密钥请放在 config.local.yaml 中，不要放这里）
 llm:
   provider: "openai"
