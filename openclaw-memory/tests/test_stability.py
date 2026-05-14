@@ -2,7 +2,7 @@
 
 import sys
 import unittest
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -92,8 +92,8 @@ class TestActionTriggerStability(unittest.TestCase):
     def test_cooldown_cache_pruning(self):
         from memory.action_trigger import ActionTrigger
         t = ActionTrigger(cooldown_seconds=1)
-        # Fill cache with old entries
-        old_time = datetime.now() - timedelta(hours=2)
+        # Fill cache with old entries (use UTC-naive to match BUG-2 fix)
+        old_time = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=2)
         for i in range(600):
             t._last_alert[f"key_{i}"] = old_time
         # Add one new entry — should trigger pruning

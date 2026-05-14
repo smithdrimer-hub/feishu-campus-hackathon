@@ -33,7 +33,7 @@ class TestOwnerKeyCoexistence(unittest.TestCase):
         keys = {o.key for o in owners}
         self.assertEqual(len(keys), len(owners),
                          "Each owner should have a unique key")
-        names = {o.current_value for o in owners}
+        names = {o.owner for o in owners}
         self.assertIn("张三", names)
 
     def test_owner_with_domain_key(self):
@@ -94,7 +94,8 @@ class TestOwnerKeyCoexistence(unittest.TestCase):
         items = extractor.extract([_make_event(text)])
         owners = [i for i in items if i.state_type == "owner"]
         self.assertGreaterEqual(len(owners), 1)
-        self.assertEqual(owners[0].current_value, "张三")
+        # F2: current_value now includes domain context
+        self.assertIn("张三", owners[0].current_value)
 
     def test_owner_pattern4_english(self):
         """Pattern 4: English 'John is the owner of API module'."""
@@ -103,7 +104,7 @@ class TestOwnerKeyCoexistence(unittest.TestCase):
         items = extractor.extract([_make_event(text)])
         owners = [i for i in items if i.state_type == "owner"]
         self.assertGreaterEqual(len(owners), 1)
-        self.assertEqual(owners[0].current_value, "John")
+        self.assertIn("John", owners[0].current_value)
 
 
 if __name__ == "__main__":

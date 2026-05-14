@@ -153,8 +153,13 @@ def build_dependency_graph(items: list[MemoryItem]) -> dict[str, Any]:
         if explicit_dep:
             resolver = str(explicit_dep)
         else:
-            for name in all_names:
-                if name and name in b.current_value and name != blocked_by:
+            # BUG-4 fix: sort by name length descending (longest first)
+            # to prevent short-name false matches (e.g. "张" in "张三丰").
+            # Require minimum 2 characters for a name to be considered.
+            for name in sorted(all_names, key=len, reverse=True):
+                if not name or len(name) < 2:
+                    continue
+                if name != blocked_by and name in b.current_value:
                     resolver = name
                     break
 
@@ -454,3 +459,75 @@ def render_orchestrated_plan_text(plan: OrchestratedPlan) -> str:
         lines.append("✅ 当前无阻塞，团队运转顺畅！")
 
     return "\n".join(lines).strip() + "\n"
+
+
+# ── FEAT-4b: Orchestrator → Executor bridge ─────────────────────
+
+def bridge_orchestrated_to_actions(
+    plan: OrchestratedPlan,
+    chat_id: str = "",
+    engine: Any = None,
+) -> list[Any]:
+    """Convert OrchestratedPlan into ActionProposal items for execution.
+
+    Each UnblockAction becomes an ActionProposal with type="send_alert"
+    (notify the assignee in the group chat).  Idempotency keys prevent
+    re-notification within the cooldown window.
+
+    Args:
+        plan: OrchestratedPlan from orchestrate().
+        chat_id: Target Feishu chat for sending alerts.
+        engine: Optional MemoryEngine for owner open_id resolution.
+
+    Returns:
+        List of ActionProposal instances ready for executor consumption.
+    """
+    from memory.action_planner import ActionProposal
+
+    proposals = []
+    for action in plan.actions:
+        action_fingerprint = f"{action.assignee}:{action.action[:60]}"
+        id_key = ActionProposal.make_idempotency_key(
+            "orchestrator", plan.project_id, action_fingerprint,
+        )
+
+        target_open_id = ""
+        if (engine and action.assignee
+                and action.assignee not in ("待分配", "团队决策")):
+            try:
+                target_open_id = engine.resolve_owner_open_id(
+                    action.assignee) or ""
+            except Exception:
+                pass
+
+        unblock_text = (
+            f" → 解锁: {', '.join(action.unblocks)}"
+            if action.unblocks else ""
+        )
+        alert_text = (
+            f"[编排建议 P{action.priority}] {action.assignee}："
+            f"{action.action}{unblock_text}\n"
+            f"理由：{action.reason}"
+        )
+
+        proposals.append(ActionProposal(
+            action_type="send_alert",
+            title=f"[Orchestrator] {action.action[:60]}",
+            reason=f"编排引擎：{action.reason}",
+            confidence=0.80,
+            risk_level="medium",
+            requires_confirmation=False,
+            idempotency_key=id_key,
+            target_chat_id=chat_id,
+            target_owner=action.assignee,
+            target_owner_open_id=target_open_id,
+            evidence_refs=[{"excerpt": action.evidence_msg[:80]}],
+            metadata={
+                "alert_detail": alert_text,
+                "orchestrator_priority": action.priority,
+                "unblocks": action.unblocks,
+                "assignee": action.assignee,
+            },
+        ))
+
+    return proposals

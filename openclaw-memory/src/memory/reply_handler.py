@@ -61,15 +61,31 @@ def parse_confirmation(text: str) -> tuple[bool, list[int]]:
     Examples:
         "确认 1,2" → (True, [1, 2])
         "都不是"   → (True, [])  — confirms none
+        "不确认"   → (True, [])  — negation of confirm
         "好的收到"  → (False, []) — not a confirmation reply
+
+    BUG-1 fix: detect negation prefixes (不/没/未/无法/不能/暂不) before
+    positive words (确认/是/对/ok/可以) to avoid false positives like
+    "不确认" being classified as a positive confirmation.
     """
-    if any(w in text for w in ("都不是", "都不是", "都不对", "没有", "不对", "否")):
+    # Phase 1: explicit negative phrases (confirms nothing is chosen)
+    if any(w in text for w in ("都不是", "都不对", "没有", "不对", "否", "不是", "不行", "不可以")):
         return True, []
-    if any(w in text for w in ("确认", "是", "对", "ok", "可以")):
+
+    # Phase 2: negated positive words — check BEFORE positive match
+    positive_words = ("确认", "是", "对", "ok", "可以")
+    for pos_word in positive_words:
+        for neg_prefix in ("不", "没", "未", "无法", "不能", "暂不"):
+            if f"{neg_prefix}{pos_word}" in text:
+                return True, []
+
+    # Phase 3: positive confirmation
+    if any(w in text for w in positive_words):
         import re
         nums = re.findall(r"\d+", text)
         indices = [int(n) for n in nums if 1 <= int(n) <= 10]
         return True, indices
+
     return False, []
 
 
@@ -174,3 +190,80 @@ def _cmd_standup(project_id: str, store) -> str:
     from memory.project_state import render_standup_summary
     items = store.list_items(project_id)
     return render_standup_summary(items, project_id)
+
+
+# ── FEAT-7: Card action callback handling ──────────────────────
+
+def parse_card_action_callback(event: dict) -> dict | None:
+    """Parse a Feishu card.action.trigger event.
+
+    When users click card buttons, Feishu sends a callback event with
+    the button value dict containing the action type and identity_key.
+
+    Returns:
+        Dict with 'action', 'identity_key', 'owner' keys, or None.
+    """
+    action = event.get("action", {})
+    if not isinstance(action, dict):
+        return None
+    value = action.get("value")
+    if not isinstance(value, dict):
+        # value might be a JSON string
+        import json as _json
+        if isinstance(value, str):
+            try:
+                value = _json.loads(value)
+            except (_json.JSONDecodeError, TypeError):
+                return None
+        else:
+            return None
+    if not isinstance(value, dict) or "action" not in value:
+        return None
+    return value
+
+
+def handle_card_callback(
+    callback_value: dict,
+    adapter: Any = None,
+    store: Any = None,
+    project_id: str = "",
+) -> str:
+    """Execute the action from a card button callback.
+
+    Returns a status string for logging.
+    """
+    action_type = callback_value.get("action", "")
+    identity_key = callback_value.get("identity_key", "")
+
+    if action_type == "confirm_task":
+        owner = callback_value.get("owner", "")
+        if adapter and store and identity_key:
+            items = store.list_items(project_id)
+            for item in items:
+                if item.identity_key() == identity_key:
+                    adapter.create_task(
+                        summary=item.current_value[:200],
+                        description=f"来源：记忆引擎自动识别\n"
+                                    f"负责人：{owner}\n"
+                                    f"置信度：{item.confidence:.2f}",
+                    )
+                    break
+        return f"confirmed:{identity_key}"
+
+    if action_type == "dismiss_task":
+        from memory.action_trigger import _is_ignored
+        # Write to ignore list via the same path R4 uses
+        _IGNORE_LIST_PATH = Path("data/ignore_list.jsonl")
+        _IGNORE_LIST_PATH.parent.mkdir(parents=True, exist_ok=True)
+        import json as _json
+        from datetime import datetime, timezone as _tz
+        entry = {
+            "identity_key": identity_key,
+            "ignored_at": datetime.now(_tz.utc).isoformat(),
+            "source": "card_dismiss",
+        }
+        with _IGNORE_LIST_PATH.open("a", encoding="utf-8") as f:
+            f.write(_json.dumps(entry, ensure_ascii=False) + "\n")
+        return f"dismissed:{identity_key}"
+
+    return f"unknown:{action_type}"

@@ -216,3 +216,78 @@ class EventRouter:
             or event.get("content", "")
             or event.get("body", {}).get("content", "")
         )
+
+
+# ── FEAT-5: New member onboarding handler ────────────────────────
+
+def handle_member_added(
+    event: dict,
+    store: Any = None,
+    adapter: Any = None,
+    chat_id: str = "",
+    project_id: str = "",
+) -> str | None:
+    """Handle im.chat.member.user.added_v1 event.
+
+    When a new member joins a managed group chat, generate a welcome
+    context card using the existing project-state machinery and send
+    it to the group.  Returns the message_id if successfully sent,
+    or None if the event is not a member-added event or sending failed.
+
+    Args:
+        event: Raw Feishu event dict (compact format).
+        store: MemoryStore instance for listing items.
+        adapter: LarkCliAdapter for sending messages.
+        chat_id: Target chat for the welcome message.
+        project_id: Project identifier for context generation.
+
+    Returns:
+        Sent message_id string, or None.
+    """
+    # Extract member info from event
+    members = event.get("members", []) or []
+    event_type = event.get("event_type", "") or event.get("type", "")
+    if "member.user.added" not in str(event_type):
+        return None
+
+    for member in members:
+        user_id = (member.get("user_id", "")
+                   or member.get("open_id", "")
+                   or member.get("member_id", ""))
+        name = (member.get("name", "")
+                or member.get("display_name", "")
+                or member.get("member_name", ""))
+        if not user_id:
+            continue
+
+        try:
+            from memory.project_state import (
+                build_personal_work_context,
+                render_personal_context_text,
+            )
+            resolved_project = project_id or "default"
+            items = store.list_items(resolved_project) if store else []
+            ctx = build_personal_work_context(name, resolved_project, items)
+            welcome_text = render_personal_context_text(ctx)
+
+            welcome_msg = (
+                f"欢迎新成员 **{name}** 加入群聊！\n\n"
+                f"**当前项目状态已为你加载：**\n\n"
+                f"{welcome_text}\n\n"
+                f"---\n回复 **@bot 状态** 查看更多"
+            )
+
+            if adapter:
+                result = adapter.send_message(
+                    chat_id, welcome_msg, msg_type="markdown",
+                )
+                if result.returncode == 0 and result.data:
+                    inner = (result.data.get("data", result.data)
+                             if isinstance(result.data, dict) else {})
+                    return str(inner.get("message_id", ""))
+        except Exception:
+            import logging
+            logging.getLogger(__name__).warning(
+                "handle_member_added failed for %s", name, exc_info=True)
+
+    return None

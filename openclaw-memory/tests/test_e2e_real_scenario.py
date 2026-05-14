@@ -136,7 +136,7 @@ class TestFullProjectScenario(unittest.TestCase):
         owners = [i for i in items if i.state_type == "owner"]
         self.assertGreaterEqual(len(owners), 2,
                                 f"Should have >=2 owners, got {len(owners)}")
-        owner_names = {o.current_value for o in owners}
+        owner_names = {o.owner for o in owners}
         self.assertIn("张三", owner_names)
         self.assertIn("李四", owner_names)
 

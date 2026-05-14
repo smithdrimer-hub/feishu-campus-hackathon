@@ -113,6 +113,13 @@ class ActionTrigger:
         proposals.extend(self._rule_deadline_risk_warning(project_id, chat_id))
         proposals.extend(self._rule_low_confidence_question(diff, project_id, chat_id))
         proposals.extend(self._rule_blocker_resolved(diff, project_id, chat_id))
+        # V1.19 P1 FEAT-6: expanded rule set
+        proposals.extend(self._rule_r6_task_completed(diff, project_id, chat_id))
+        proposals.extend(self._rule_r7_stale_blocker_escalation(project_id, chat_id))
+        proposals.extend(self._rule_r8_decision_confirmed(diff, project_id, chat_id))
+        proposals.extend(self._rule_r9_goal_handoff(diff, project_id, chat_id))
+        proposals.extend(self._rule_r10_member_unavailable(project_id, chat_id))
+        proposals.extend(self._rule_r11_deadline_no_action(project_id, chat_id))
         return proposals
 
     def write_results(
@@ -391,6 +398,246 @@ class ActionTrigger:
             metadata={"alert_detail": title, "resolved_count": len(resolved)},
         )]
 
+    # ── FEAT-6: R6-R11 expanded rules ─────────────────────────────
+
+    def _rule_r6_task_completed(
+        self, diff: dict, project_id: str, chat_id: str,
+    ) -> list[ActionProposal]:
+        """R6: 任务完成通知——next_step 标记为 completed 时在群内通知。"""
+        if not chat_id:
+            return []
+        completed = []
+        for item in diff.get("updated", []):
+            if item.state_type != "next_step":
+                continue
+            meta = getattr(item, "metadata", None) or {}
+            if meta.get("task_status") != "completed":
+                continue
+            completed.append(item)
+        if not completed:
+            return []
+        id_key = ActionProposal.make_idempotency_key(
+            "r6_completed", project_id,
+            ",".join(i.identity_key() for i in completed[:3]),
+        )
+        if self._is_cooling_down(id_key):
+            return []
+        names = [getattr(i, "owner", "?") for i in completed[:3]]
+        title = f"任务完成：{', '.join(names)} 已完成 {len(completed)} 个任务"
+        return [ActionProposal(
+            action_type="send_alert",
+            title=title[:80],
+            reason=f"任务状态回流检测到 {len(completed)} 个已完成任务",
+            confidence=0.90, risk_level="low",
+            requires_confirmation=False, idempotency_key=id_key,
+            target_chat_id=chat_id,
+            metadata={"alert_detail": title},
+        )]
+
+    def _rule_r7_stale_blocker_escalation(
+        self, project_id: str, chat_id: str,
+    ) -> list[ActionProposal]:
+        """R7: 老阻塞升级——阻塞超过3天自动升级提醒。"""
+        if not self.engine or not chat_id:
+            return []
+        items = self.engine.store.list_items(project_id)
+        stale = []
+        for item in items:
+            if item.state_type != "blocker":
+                continue
+            if not self._is_unresolved_blocker(item):
+                continue
+            days = self._blocker_age_days(item)
+            if days < 3:
+                continue
+            stale.append((item, days))
+        if not stale:
+            return []
+        id_key = ActionProposal.make_idempotency_key(
+            "r7_stale", project_id, "batch")
+        if self._is_cooling_down(id_key):
+            return []
+        stale.sort(key=lambda x: x[1], reverse=True)
+        lines = [
+            f"- {getattr(i, 'owner', '?')}: {i.current_value[:60]} [{d}天]"
+            for i, d in stale[:5]
+        ]
+        title = f"阻塞升级：{len(stale)} 个阻塞已持续超过3天"
+        alert = title + "\n" + "\n".join(lines)
+        return [ActionProposal(
+            action_type="send_alert", title=title[:80],
+            reason=f"{len(stale)} 个阻塞超过3天未解决",
+            confidence=0.80, risk_level="high",
+            requires_confirmation=False, idempotency_key=id_key,
+            target_chat_id=chat_id,
+            metadata={"alert_detail": alert},
+        )]
+
+    @staticmethod
+    def _blocker_age_days(item) -> int:
+        """Days since this item was first recorded."""
+        raw = getattr(item, "recorded_at", "") or ""
+        if not raw:
+            return 0
+        try:
+            s = raw.replace("Z", "+00:00")
+            recorded = datetime.fromisoformat(s)
+            if recorded.tzinfo is None:
+                recorded = recorded.replace(tzinfo=timezone.utc)
+            delta = datetime.now(timezone.utc) - recorded
+            return max(0, delta.days)
+        except (ValueError, TypeError):
+            return 0
+
+    def _rule_r8_decision_confirmed(
+        self, diff: dict, project_id: str, chat_id: str,
+    ) -> list[ActionProposal]:
+        """R8: 决策确认——confirmed 决策自动记录。"""
+        if not chat_id:
+            return []
+        confirmed = []
+        for item in diff.get("created", []):
+            if item.state_type != "decision":
+                continue
+            strength = getattr(item, "decision_strength", "") or ""
+            if strength != "confirmed":
+                continue
+            confirmed.append(item)
+        if not confirmed:
+            return []
+        id_key = ActionProposal.make_idempotency_key(
+            "r8_decision", project_id,
+            ",".join(i.identity_key() for i in confirmed[:3]),
+        )
+        if self._is_cooling_down(id_key):
+            return []
+        lines = [
+            f"- {i.current_value[:80]}"
+            + (f" ({getattr(i, 'owner', '')})" if getattr(i, "owner", "") else "")
+            for i in confirmed[:3]
+        ]
+        title = f"决策已确认：{len(confirmed)} 条"
+        alert = title + "\n" + "\n".join(lines)
+        return [ActionProposal(
+            action_type="send_alert", title=title[:80],
+            reason="已确认决策自动记录",
+            confidence=0.85, risk_level="low",
+            requires_confirmation=False, idempotency_key=id_key,
+            target_chat_id=chat_id,
+            metadata={"alert_detail": alert},
+        )]
+
+    def _rule_r9_goal_handoff(
+        self, diff: dict, project_id: str, chat_id: str,
+    ) -> list[ActionProposal]:
+        """R9: 项目目标变更→提醒生成交接文档。"""
+        if not chat_id:
+            return []
+        for item in diff.get("created", []):
+            if item.state_type != "project_goal":
+                continue
+            id_key = ActionProposal.make_idempotency_key(
+                "r9_goal", project_id, item.identity_key())
+            if self._is_cooling_down(id_key):
+                continue
+            return [ActionProposal(
+                action_type="send_alert",
+                title=f"[目标变更] {item.current_value[:60]}",
+                reason="项目目标已更新，建议重新生成交接文档",
+                confidence=0.75, risk_level="medium",
+                requires_confirmation=False, idempotency_key=id_key,
+                target_chat_id=chat_id,
+                metadata={"alert_detail": (
+                    f"项目目标已更新为：{item.current_value[:150]}\n"
+                    f"建议重新生成交接文档查看最新状态"
+                )},
+            )]
+        return []
+
+    def _rule_r10_member_unavailable(
+        self, project_id: str, chat_id: str,
+    ) -> list[ActionProposal]:
+        """R10: 成员不可用通知——检测到请假/出差/休假时通知团队。"""
+        if not self.engine or not chat_id:
+            return []
+        items = self.engine.store.list_items(project_id)
+        absences = []
+        for item in items:
+            if item.state_type != "member_status":
+                continue
+            val = item.current_value.lower()
+            if any(k in val for k in ("请假", "出差", "休假", "不在公司")):
+                absences.append(item)
+        if not absences:
+            return []
+        id_key = ActionProposal.make_idempotency_key(
+            "r10_absence", project_id, "batch")
+        if self._is_cooling_down(id_key):
+            return []
+        lines = [
+            f"- {getattr(i, 'owner', '?')\
+               or (i.source_refs[0].sender_name if i.source_refs else '?')}\
+               ：{i.current_value[:60]}"
+            for i in absences[:5]
+        ]
+        title = f"成员状态提醒：{len(absences)} 人当前不可用"
+        alert = title + "\n" + "\n".join(lines)
+        return [ActionProposal(
+            action_type="send_alert", title=title[:80],
+            reason=f"检测到 {len(absences)} 名成员请假/出差/不在岗",
+            confidence=0.75, risk_level="medium",
+            requires_confirmation=False, idempotency_key=id_key,
+            target_chat_id=chat_id,
+            metadata={"alert_detail": alert},
+        )]
+
+    def _rule_r11_deadline_no_action(
+        self, project_id: str, chat_id: str,
+    ) -> list[ActionProposal]:
+        """R11: 截止日期在2天内但owner无next_step时提醒。"""
+        if not self.engine or not chat_id:
+            return []
+        try:
+            from memory.date_parser import deadline_is_imminent
+        except ImportError:
+            return []
+        items = self.engine.store.list_items(project_id)
+        next_owners = {
+            getattr(i, "owner", "") for i in items
+            if i.state_type == "next_step" and getattr(i, "owner", "")
+        }
+        warnings = []
+        for item in items:
+            if item.state_type != "deadline":
+                continue
+            if not deadline_is_imminent(item.current_value, within_days=2):
+                continue
+            owner = getattr(item, "owner", "") or ""
+            if owner and owner in next_owners:
+                continue
+            warnings.append(item)
+        if not warnings:
+            return []
+        id_key = ActionProposal.make_idempotency_key(
+            "r11_ddl_noact", project_id, "batch")
+        if self._is_cooling_down(id_key):
+            return []
+        lines = [
+            f"- {i.current_value[:80]}"
+            + (f" ({getattr(i, 'owner', '')})" if getattr(i, "owner", "") else "")
+            for i in warnings[:3]
+        ]
+        title = f"DDL预警：{len(warnings)} 个截止日期临近但无人认领"
+        alert = title + "\n" + "\n".join(lines)
+        return [ActionProposal(
+            action_type="send_alert", title=title[:80],
+            reason=f"{len(warnings)} 个截止日期在2天内到期但对应owner无行动项",
+            confidence=0.70, risk_level="high",
+            requires_confirmation=False, idempotency_key=id_key,
+            target_chat_id=chat_id,
+            metadata={"alert_detail": alert},
+        )]
+
     # ── Rule 2 helpers ──────────────────────────────────────────
 
     def _is_genuinely_new_blocker(self, item, project_id: str) -> bool:
@@ -498,13 +745,20 @@ class ActionTrigger:
         return []
 
     def _is_cooling_down_person(self, person_key: str, cooldown_seconds: float) -> bool:
-        """检查同人冷却（独立于同候选冷却）。"""
+        """检查同人冷却（独立于同候选冷却）。
+
+        BUG-2 fix: use UTC-naive datetimes consistently with
+        action_log.has_recent_action() which also uses UTC.  Previously
+        datetime.now() produced local-time naive timestamps that could
+        drift relative to the persistent log on non-UTC systems.
+        """
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
         last = self._last_alert.get(person_key)
         if last is not None:
-            elapsed = (datetime.now() - last).total_seconds()
+            elapsed = (now - last).total_seconds()
             if elapsed < cooldown_seconds:
                 return True
-        self._last_alert[person_key] = datetime.now()
+        self._last_alert[person_key] = now
         return False
 
     # ── Helpers ──────────────────────────────────────────────────
@@ -519,11 +773,17 @@ class ActionTrigger:
         return bs not in ("resolved", "obsolete")
 
     def _is_cooling_down(self, idempotency_key: str) -> bool:
-        """Check both in-memory cache and persistent action_log."""
+        """Check both in-memory cache and persistent action_log.
+
+        BUG-2 fix: use UTC-naive datetimes consistently for in-memory
+        cache timestamps, matching action_log.has_recent_action() which
+        reads UTC timestamps from the persistent log.
+        """
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
         # In-memory cache
         last = self._last_alert.get(idempotency_key)
         if last is not None:
-            elapsed = (datetime.now() - last).total_seconds()
+            elapsed = (now - last).total_seconds()
             if elapsed < self.cooldown_seconds:
                 return True
         # Persistent log
@@ -531,9 +791,9 @@ class ActionTrigger:
             return True
         # V1.18: 缓存超过500条时清理旧条目防止内存泄漏
         if len(self._last_alert) > 500:
-            cutoff = datetime.now() - timedelta(hours=self.cooldown_seconds / 3600 * 2)
+            cutoff = now - timedelta(hours=self.cooldown_seconds / 3600 * 2)
             self._last_alert = {k: v for k, v in self._last_alert.items()
                                 if v > cutoff}
         # Mark as seen
-        self._last_alert[idempotency_key] = datetime.now()
+        self._last_alert[idempotency_key] = now
         return False

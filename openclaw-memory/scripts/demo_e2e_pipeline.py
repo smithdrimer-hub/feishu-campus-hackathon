@@ -43,7 +43,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--limit", type=int, default=50, help="最大同步消息数")
     parser.add_argument("--dry-run", action="store_true", help="只同步+提取，不发消息不置顶")
     parser.add_argument("--no-pin", action="store_true", help="发送消息但不置顶")
-    parser.add_argument("--hybrid", action="store_true", help="使用 HybridExtractor（需配置 LLM）")
+    parser.add_argument("--hybrid", action="store_true", default=None,
+                        help="使用 HybridExtractor（默认自动检测 LLM 配置）")
+    parser.add_argument("--no-hybrid", action="store_true",
+                        help="强制使用纯规则提取器")
     parser.add_argument("--personal", default=None, help="发送个人上下文（形态 B），传入用户名")
     parser.add_argument("--doc-id", default=None, help="飞书文档 ID (doc_xxx)，同步文档数据源")
     parser.add_argument("--task-query", default=None, help="任务搜索关键词，同步任务数据源")
@@ -61,6 +64,12 @@ def parse_args() -> argparse.Namespace:
                         help="会议纪要后发送确认清单到群")
     parser.add_argument("--trigger", action="store_true",
                         help="启用触发引擎（基于 diff 自动检测并生成动作提案）")
+    parser.add_argument("--orchestrate", action="store_true",
+                        help="启用编排引擎（基于 Memory 状态生成解阻塞方案并发送）")
+    parser.add_argument("--include-app-msgs", action="store_true",
+                        help="包含 app/bot 身份发送的消息（演示模式，模拟真实群聊）")
+    parser.add_argument("--agent-doc", action="store_true",
+                        help="生成 Agent Memory Document 并发布到飞书文档")
     parser.add_argument("--mode", default="preview",
                         choices=["preview", "confirm", "auto"],
                         help="触发引擎模式: preview(仅显示) / confirm(逐条确认) / auto(自动执行)")
@@ -117,7 +126,9 @@ def main() -> None:
     # ── 初始化 ────────────────────────────────────────────────
     adapter = LarkCliAdapter()
     store = MemoryStore(Path(args.data_dir))
-    extractor = _get_extractor(args.hybrid)
+    # 1.1: 默认自动检测 LLM → Hybrid，--no-hybrid 强制 RuleOnly
+    use_hybrid = args.hybrid if args.hybrid is not None else not args.no_hybrid
+    extractor = _get_extractor(use_hybrid)
     engine = MemoryEngine(store, extractor=extractor, adapter=adapter)
 
     # V1.12 AUTH-1/2: 身份感知 + 群聊自动绑定
@@ -202,6 +213,16 @@ def main() -> None:
     for msg in all_messages:
         if not _is_collaboration_message(msg):
             continue
+        # 跳过 app 身份消息（bot/自己发的卡片/提醒）
+        # --include-app-msgs 时保留 app 消息（演示模式，模拟真实群聊）
+        if not args.include_app_msgs:
+            sender = msg.get("sender", {}) or {}
+            if sender.get("sender_type") == "app":
+                continue
+        # 跳过 @bot 指令和测试消息
+        raw_text = str(msg.get("content", "") or msg.get("text", ""))
+        if raw_text.strip().startswith("@bot") or raw_text.strip().startswith("[阻塞]") or raw_text.strip() == "阻塞清单":
+            continue
         ev = _normalize_event(msg, args.chat_id, args.project_id)
         if ev["message_id"] in processed_ids:
             continue
@@ -220,11 +241,16 @@ def main() -> None:
                               len(all_messages), written)
 
     # ── Step 2: 提取记忆 ───────────────────────────────────────
-
-    # ── Step 2: 提取记忆 ───────────────────────────────────────
     print("[2/5] 提取结构化记忆...")
     items = engine.process_new_events(args.project_id, debounce=False)
     print(f"    提取到 {len(items)} 条活跃记忆\n")
+
+    # ── Step 2.5: 审核卡片 ────────────────────────────────────────
+    needs_review = [i for i in items if i.review_status == "needs_review"]
+    if needs_review:
+        print(f"[审核] 发现 {len(needs_review)} 条待审核记忆，发送审核卡片...")
+        _send_review_card(adapter, args.chat_id, needs_review)
+        print()
 
     # ── Step 3: 可选 — 文档/任务数据源 ──────────────────────────
     if args.doc_id:
@@ -287,6 +313,14 @@ def main() -> None:
 
     # ── Step 3.5: 可选 — 触发引擎 / 手动执行 ─────────────────────
     action_results: list[tuple] = []
+    # 构建 owner_map（触发器和编排器共用）
+    owner_map: dict[str, str] = {}
+    for item in items:
+        if item.owner and item.state_type in ("owner", "next_step", "blocker"):
+            if item.owner not in owner_map:
+                open_id = engine.resolve_owner_open_id(item.owner)
+                if open_id:
+                    owner_map[item.owner] = open_id
     if args.trigger:
         print("[3.5/5] 触发引擎扫描...")
         from memory.action_trigger import ActionTrigger
@@ -299,6 +333,11 @@ def main() -> None:
             engine=engine,
             log_path=str(Path(args.data_dir) / "action_log.jsonl"),
         )
+        # FEAT-1: 在 trigger.scan() 前同步任务状态，使 R5 能检测到阻塞解除
+        synced = engine.sync_task_status(data_dir=args.data_dir)
+        if synced > 0:
+            print(f"    任务状态回流：{synced} 项已更新")
+            diff = engine.last_diff  # 包含 sync_task_status 产生的 updated 条目
         proposals = trigger.scan(diff, args.project_id, args.chat_id, mode=args.mode)
         print(f"    生成 {len(proposals)} 个动作提案：")
         for p in proposals:
@@ -316,7 +355,7 @@ def main() -> None:
         else:
             auto_confirm = args.mode == "auto"
             executor = ActionExecutor(adapter, auto_confirm=auto_confirm)
-            owner_map: dict[str, str] = {}
+            # Augment owner_map with any additional open_ids from proposals
             for p in proposals:
                 if p.target_owner_open_id and p.target_owner:
                     owner_map[p.target_owner] = p.target_owner_open_id
@@ -351,6 +390,51 @@ def main() -> None:
                 for r in results
             ]
 
+    if args.orchestrate:
+        print("[3.6/5] 编排引擎扫描...")
+        from memory.orchestrator import orchestrate, \
+            bridge_orchestrated_to_actions, render_orchestrated_plan_text
+
+        orchestrated = orchestrate(args.project_id, items)
+        print(f"    编排完成：{len(orchestrated.actions)} 个行动建议")
+        plan_text = render_orchestrated_plan_text(orchestrated)
+        try:
+            print(f"    {plan_text[:200]}...")
+        except UnicodeEncodeError:
+            print(f"    (编排方案已生成，{len(orchestrated.actions)} 个行动建议)")
+
+        orch_proposals = bridge_orchestrated_to_actions(
+            orchestrated, args.chat_id, engine=engine,
+        )
+
+        if orch_proposals:
+            if args.dry_run:
+                print(f"    DRY-RUN：跳过编排执行 ({len(orch_proposals)} 个提案)\n")
+            else:
+                from memory.action_planner import PlannedAction
+                from memory.action_executor import ActionExecutor
+                planned = []
+                for p in orch_proposals:
+                    planned.append(PlannedAction(
+                        action_type="send_message",
+                        title=p.metadata.get("alert_detail", p.title),
+                        reason=p.reason,
+                        command_hint="",
+                        requires_confirmation=p.requires_confirmation,
+                        metadata=p.metadata,
+                    ))
+                auto_confirm = args.mode == "auto"
+                executor = ActionExecutor(adapter, auto_confirm=auto_confirm)
+                exec_context = {
+                    "chat_id": args.chat_id,
+                    "project_id": args.project_id,
+                    "owner_map": owner_map,
+                }
+                results = executor.execute_plan(planned, exec_context)
+                executed = sum(1 for r in results if r.success)
+                failed = sum(1 for r in results if not r.success)
+                print(f"    编排执行：{executed} 已执行，{failed} 失败\n")
+
     elif args.execute_actions:
         print("[3.5/5] 生成并执行行动计划...")
         from memory.action_planner import generate_action_plan
@@ -360,14 +444,6 @@ def main() -> None:
         print(f"    生成了 {len(plan)} 个计划操作")
 
         # 构建 owner_map：解析 owner 姓名为 open_id，用于 @提醒
-        owner_map: dict[str, str] = {}
-        for item in items:
-            if item.owner and item.state_type in ("owner", "next_step", "blocker"):
-                if item.owner not in owner_map:
-                    open_id = engine.resolve_owner_open_id(item.owner)
-                    if open_id:
-                        owner_map[item.owner] = open_id
-
         executor = ActionExecutor(adapter, auto_confirm=args.auto_confirm)
         exec_context = {
             "chat_id": args.chat_id,
@@ -398,6 +474,74 @@ def main() -> None:
 
     # ── Step 4: 生成状态面板 ────────────────────────────────────
     print("[4/5] 生成状态面板...")
+
+    # C2: Agent Memory Document
+    if args.agent_doc:
+        print("[4.5/5] 生成 Agent Memory Document...")
+        from memory.agent_memory import build_agent_memory_doc
+        doc_md = build_agent_memory_doc(args.project_id, store, engine=engine)
+        print(f"    文档长度: {len(doc_md)} 字符")
+        if args.dry_run:
+            print(f"    DRY-RUN: 跳过发布")
+        else:
+            import subprocess, os as _os, json as _json
+            doc_title = f"Agent Memory Pack - {args.project_id}"
+            # 1. 创建文档空壳（用 subprocess 直接调，绕开适配器 120s 超时）
+            token = ""
+            create_cmd = (
+                f'lark-cli docs +create --title "{doc_title}" '
+                f'--as user --format json'
+            )
+            for attempt in range(2):
+                cr = subprocess.run(
+                    create_cmd, shell=True, capture_output=True,
+                    text=True, timeout=15,
+                )
+                if cr.returncode == 0:
+                    try:
+                        data = _json.loads(cr.stdout)
+                        token = str(
+                            data.get("data", {}).get("doc_id", "")
+                            or data.get("data", {}).get("document_id", "")
+                            or data.get("doc_id", "")
+                        )
+                        if token:
+                            break
+                    except _json.JSONDecodeError:
+                        pass
+                if attempt == 0:
+                    print(f"    创建重试...")
+            if not token:
+                print(f"    创建文档失败")
+            else:
+                # 2. 写临时文件 → docs +update 写入内容
+                tmp_path = "data/_agent_doc_content.md"
+                with open(tmp_path, "w", encoding="utf-8") as f:
+                    f.write(doc_md)
+                try:
+                    update_cmd = (
+                        f'lark-cli docs +update --doc {token} '
+                        f'--mode overwrite --markdown @{tmp_path}'
+                    )
+                    update_result = subprocess.run(
+                        update_cmd, shell=True, capture_output=True,
+                        text=True, timeout=30,
+                    )
+                    if update_result.returncode == 0:
+                        doc_url = f"https://www.feishu.cn/docx/{token}"
+                        print(f"    文档已发布: {doc_url}")
+                        adapter.send_message(
+                            args.chat_id,
+                            f"Agent Memory Pack\n{doc_url}",
+                            msg_type="markdown",
+                        )
+                    else:
+                        err = (update_result.stderr or update_result.stdout or "")[:150]
+                        print(f"    更新失败: {err}")
+                finally:
+                    if _os.path.exists(tmp_path):
+                        _os.unlink(tmp_path)
+
     from memory.project_state import (
         build_group_project_state,
         build_personal_work_context,
@@ -459,7 +603,9 @@ def main() -> None:
         if args.standup:
             card = render_standup_card(items, args.project_id)
         else:
-            card = render_handoff_card(items, args.project_id)
+            history = store.list_history(args.project_id)
+            card = render_handoff_card(items, args.project_id,
+                                        history_items=history)
         send_result = adapter.send_message(
             args.chat_id, _json.dumps(card, ensure_ascii=False),
             msg_type="interactive", identity=args.identity,
@@ -478,6 +624,13 @@ def main() -> None:
     else:
         msg_id = _extract_msg_id(send_result)
         print(f"    已发送 (message_id: {msg_id})")
+
+        # B6b: 对每条记忆的原消息发送飞书回复，实现可点击溯源
+        if not args.dry_run:
+            from memory.card_renderer import send_evidence_replies
+            replied = send_evidence_replies(adapter, args.chat_id, items, msg_id)
+            if replied > 0:
+                print(f"    已发送 {replied} 条证据回复（可点击跳转原消息）")
 
         if not args.no_pin and msg_id:
             pin_result = adapter.pin_message(msg_id)
@@ -503,6 +656,35 @@ def _load_last_sync_state(store) -> dict:
         except (json.JSONDecodeError, OSError):
             pass
     return {}
+
+
+def _send_review_card(adapter, chat_id: str, needs_review_items: list) -> None:
+    """V1.19: 发送审核卡片——低置信度/待审核记忆的治理入口。"""
+    import json
+    elements = [{"tag": "div", "text": {"tag": "lark_md",
+                 "content": f"AI 候选，人裁定——以下 {len(needs_review_items)} 条记忆未自动生效："}}]
+    for item in needs_review_items[:5]:
+        conf = item.confidence
+        reason = item.status_reason or ""
+        elements.append({"tag": "div", "text": {"tag": "lark_md",
+                         "content": f"- [{item.state_type}] {item.current_value[:60]} (置信度 {conf:.2f})"}})
+        if reason:
+            elements.append({"tag": "note", "elements": [
+                {"tag": "plain_text", "content": f"原因: {reason[:80]}"}]})
+    elements.append({"tag": "hr"})
+    elements.append({"tag": "note", "elements": [
+        {"tag": "plain_text", "content": "回复 '确认 1,2' 或 '驳回 3' 进行人机裁定 · Memory Engine"}]})
+    card = {"config": {"wide_screen_mode": True},
+            "header": {"title": {"tag": "plain_text",
+                       "content": f"待审核记忆 ({len(needs_review_items)} 条)"},
+                       "template": "purple"},
+            "elements": elements}
+    card_json = json.dumps(card, ensure_ascii=False)
+    if len(card_json) > 400:
+        # 精简卡片防止 Windows 命令行截断
+        card["elements"] = card["elements"][:4]
+        card_json = json.dumps(card, ensure_ascii=False)
+    adapter.send_message(chat_id, card_json, msg_type="interactive")
 
 
 def _save_last_sync_state(store, last_message_id: str, last_sync_time: str,

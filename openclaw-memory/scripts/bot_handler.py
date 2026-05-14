@@ -296,6 +296,10 @@ def main():
                result.data.get("items", []) or []
         last_baseline = {m.get("message_id", "") for m in msgs if m.get("message_id")}
 
+    # FEAT-5: 注册新成员入群事件处理器
+    from adapters.event_listener import handle_member_added
+    logger.info("新成员入职监听已注册 (im.chat.member.user.added_v1)")
+
     logger.info(f"Bot handler started. Interval={args.interval}s")
 
     while True:

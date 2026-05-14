@@ -798,6 +798,9 @@ class MemoryStore:
     ):
         """V1.15: Update blocker lifecycle status in metadata.
 
+        V1.19 P1 FEAT-1: Delegates to update_item_metadata() for the
+        actual persistence, then adds blocker-specific fields.
+
         Args:
             memory_id: Target blocker's memory_id.
             new_status: open | acknowledged | waiting_external | resolved | obsolete
@@ -807,8 +810,6 @@ class MemoryStore:
         """
         state = self.load_state()
         items = [MemoryItem.from_dict(it) for it in state.get("items", [])]
-        history = [MemoryItem.from_dict(it) for it in state.get("history", [])]
-        processed = list(state.get("processed_event_ids", []))
 
         target = None
         for item in items:
@@ -819,17 +820,51 @@ class MemoryStore:
         if target is None:
             return None
 
-        meta = dict(target.metadata) if target.metadata else {}
-        meta["blocker_status"] = new_status
+        meta_update = {"blocker_status": new_status}
         if extra:
             for k in ("acknowledged_by", "resolved_by", "dependency_owner",
                       "blocked_owner", "blocked_item", "blocking_reason"):
                 if k in extra and extra[k]:
-                    meta[k] = str(extra[k])
-        if new_status == "resolved" and "resolved_at" not in meta:
-            meta["resolved_at"] = utc_now_iso()
+                    meta_update[k] = str(extra[k])
+        if new_status == "resolved" and not (target.metadata or {}).get("resolved_at"):
+            meta_update["resolved_at"] = utc_now_iso()
 
+        return self.update_item_metadata(memory_id, meta_update)
+
+    def update_item_metadata(
+        self, memory_id: str, metadata_updates: dict[str, Any],
+    ) -> MemoryItem | None:
+        """Update metadata on any MemoryItem by memory_id.
+
+        V1.19 P1 FEAT-1: General-purpose metadata update used by
+        sync_task_status() to mark next_step items as completed and
+        by update_blocker_status() for blocker lifecycle changes.
+
+        Unlike upsert_items(), this is a targeted single-item update
+        that does NOT go through the full upsert pipeline (no Layer
+        1-4 checks, no diff population).  Callers are responsible
+        for populating engine.last_diff if trigger visibility is needed.
+
+        Returns the updated MemoryItem, or None if not found.
+        """
+        state = self.load_state()
+        items = [MemoryItem.from_dict(it) for it in state.get("items", [])]
+        history = [MemoryItem.from_dict(it) for it in state.get("history", [])]
+        processed = list(state.get("processed_event_ids", []))
+
+        target = None
+        for item in items:
+            if item.memory_id == memory_id:
+                target = item
+                break
+
+        if target is None:
+            return None
+
+        meta = dict(target.metadata) if target.metadata else {}
+        meta.update(metadata_updates)
         target.metadata = meta
+
         self.save_state(items, history, processed)
         return target
 
@@ -1563,7 +1598,8 @@ class MemoryStore:
                                     del by_key[mk]
 
             # V1.18: 跨源一致性检查——同主题但不同来源→冲突
-            if old_item is None and new_item.state_type in ("decision", "owner", "deadline", "blocker"):
+            # BUG-3 fix: 移除 old_item is None 条件，确保更新（非首次插入）时也检测跨源冲突
+            if new_item.state_type in ("decision", "owner", "deadline", "blocker"):
                 new_source = str(new_item.source_refs[0].type) if new_item.source_refs else ""
                 for existing in list(items):
                     if existing.state_type != new_item.state_type:

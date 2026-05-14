@@ -62,6 +62,9 @@ class MemoryEngine:
         self.last_diff: dict[str, list] = {
             "created": [], "updated": [], "unchanged": [], "conflicts": [],
         }
+        # BUG-5 fix: 维护节流计数器（避免高频同步时重复扫描全量 items）
+        self._maintenance_counter: int = 0
+        self._last_maintenance_time: datetime | None = None
 
     def ingest_events(self, events: list[dict], debounce: bool = True) -> list[MemoryItem]:
         """Append raw events, process new events with optional debounce.
@@ -114,6 +117,7 @@ class MemoryEngine:
         events = self._normalize_events(events)
 
         new_items = self.extractor.extract(events)
+        new_items = self._sanitize_items(new_items)
         processed_ids = [raw_event_id(event) for event in events]
 
         if not new_items:
@@ -139,8 +143,15 @@ class MemoryEngine:
 
         self._set_last_process_time(project_id, datetime.now())
 
-        # V1.19: 每次处理完新事件后执行轻量维护
-        self.store.maintenance()
+        # V1.19: 轻量维护（每 5 次处理或距上次 > 10 分钟才执行，避免高频同步时重复扫描）
+        self._maintenance_counter += 1
+        now = datetime.now()
+        if (self._maintenance_counter >= 5
+                or self._last_maintenance_time is None
+                or (now - self._last_maintenance_time).total_seconds() > 600):
+            self.store.maintenance()
+            self._maintenance_counter = 0
+            self._last_maintenance_time = now
 
         return result
 
@@ -205,6 +216,10 @@ class MemoryEngine:
         doc_events = []
         for i, chunk in enumerate(chunks):
             chunk_id = f"doc_{doc_id}_{content_hash}_{i}"
+            hints = {}
+            for k in ("detected_type", "detected_owner", "extraction_hint"):
+                if chunk.get(k):
+                    hints[k] = chunk[k]
             doc_events.append({
                 "project_id": resolved_project,
                 "chat_id": "",
@@ -217,6 +232,7 @@ class MemoryEngine:
                 "section": chunk["section"],
                 "sender": {"id": "doc_sync", "sender_type": "user",
                            "name": f"文档《{title}》"},
+                "extraction_hints": hints,
             })
 
         print(f"sync_doc: 已读取文档 '{title}' ({len(markdown)} 字符) → {len(doc_events)} 个事件")
@@ -305,15 +321,41 @@ class MemoryEngine:
                             "text": f"【文档】{title} › {section_title}\n{row_text}",
                         })
                 elif headers:
+                    # FEAT-2: 检测列头中的结构化字段
+                    owner_cols = []
+                    ddl_cols = []
+                    for j, h in enumerate(headers):
+                        hl = h.lower()
+                        if any(kw in hl for kw in ("负责人", "owner", "assignee", "经办人", "责任人")):
+                            owner_cols.append(j)
+                        if any(kw in hl for kw in ("ddl", "截止", "deadline", "期限", "到期")):
+                            ddl_cols.append(j)
                     for _, cells in data_lines:
                         pairs = []
+                        detected_owner = ""
+                        detected_type = ""
+                        extraction_hint = ""
                         for j, cell in enumerate(cells):
                             h = headers[j] if j < len(headers) else f"col{j}"
                             pairs.append(f"{h}: {cell}")
+                            if j in owner_cols and cell.strip():
+                                detected_owner = cell.strip()
+                                detected_type = "owner"
+                                extraction_hint = f"owner={detected_owner}"
+                            if j in ddl_cols and cell.strip():
+                                if not detected_type:
+                                    detected_type = "deadline"
+                                extraction_hint = (
+                                    f"{extraction_hint};deadline={cell.strip()}"
+                                    if extraction_hint else f"deadline={cell.strip()}"
+                                )
                         row_text = " ".join(pairs)
                         chunks.append({
                             "section": section_title,
                             "text": f"【文档】{title} › {section_title}\n{row_text}",
+                            "detected_type": detected_type,
+                            "detected_owner": detected_owner,
+                            "extraction_hint": extraction_hint,
                         })
                 continue
 
@@ -333,9 +375,33 @@ class MemoryEngine:
 
             if collab_items:
                 for item_text in collab_items:
+                    # FEAT-2: 从列表项中检测结构化信号
+                    detected_owner = ""
+                    detected_type = ""
+                    extraction_hint = ""
+                    owner_match = re.search(
+                        r"(?:负责人|负责|owner)[：:\s]*(.{1,20})", item_text)
+                    ddl_match = re.search(
+                        r"(?:DDL|截止|deadline|期限|到期)[：:\s]*(.{1,30})", item_text,
+                        re.IGNORECASE)
+                    if owner_match:
+                        detected_owner = owner_match.group(1).strip()
+                        detected_type = "owner"
+                        extraction_hint = f"owner={detected_owner}"
+                    if ddl_match:
+                        if not detected_type:
+                            detected_type = "deadline"
+                        ddl_val = ddl_match.group(1).strip()
+                        extraction_hint = (
+                            f"{extraction_hint};deadline={ddl_val}"
+                            if extraction_hint else f"deadline={ddl_val}"
+                        )
                     chunks.append({
                         "section": section_title,
                         "text": f"【文档】{title} › {section_title}\n{item_text}",
+                        "detected_type": detected_type,
+                        "detected_owner": detected_owner,
+                        "extraction_hint": extraction_hint,
                     })
                 # 非协作列表项合并回正文
                 remaining_lines = [
@@ -779,10 +845,11 @@ class MemoryEngine:
     # ── V1.15: 任务状态回流 ─────────────────────────────────────
 
     def sync_task_status(self, data_dir: str | None = None) -> int:
-        """V1.18: 任务状态回流——检测飞书中已完成的任务→更新 MemoryItem。
+        """V1.19 P1 FEAT-1: 任务状态回流——检测飞书中已完成的任务→更新 MemoryItem。
 
         读取 task_map.jsonl 中的 task_guid，查飞书任务状态。
         completed/done → 对应 next_step 标为 task_status="completed"。
+        同步扫描关联 blocker 并标记 resolved，填充 last_diff 供 R5 可见。
         """
         import json as _json
         task_map_path = Path(data_dir or self.store.data_dir) / "task_map.jsonl"
@@ -801,6 +868,7 @@ class MemoryEngine:
             return 0
 
         updated = 0
+        updated_ids: list[str] = []
         seen = set()
         for entry in entries[-50:]:
             guid = entry.get("task_guid", "")
@@ -818,7 +886,8 @@ class MemoryEngine:
                     continue
                 status = task.get("status", "")
                 if status in ("completed", "done"):
-                    items = self.store.list_items(entry.get("project_id", ""))
+                    project = entry.get("project_id", "")
+                    items = self.store.list_items(project)
                     summary = entry.get("summary", "")
                     matched = False
                     for item in items:
@@ -826,22 +895,44 @@ class MemoryEngine:
                             continue
                         if summary[:30] in item.current_value or \
                            item.current_value[:30] in summary:
-                            meta = dict(getattr(item, "metadata", {}) or {})
-                            meta["task_status"] = "completed"
-                            meta["task_guid"] = guid
-                            item.metadata = meta
+                            result_item = self.store.update_item_metadata(
+                                item.memory_id,
+                                {"task_status": "completed", "task_guid": guid},
+                            )
+                            if result_item:
+                                updated_ids.append(item.memory_id)
+                                updated += 1
                             matched = True
-                            updated += 1
                             break
-                    if matched:
-                        break  # one match per task_guid is enough
+                    if not matched:
+                        break
 
-        if updated > 0:
-            state = self.store.load_state()
-            items = [MemoryItem.from_dict(i) for i in state.get("items", [])]
-            history = [MemoryItem.from_dict(h) for h in state.get("history", [])]
-            processed = state.get("processed_event_ids", [])
-            self.store.save_state(items, history, processed)
+                    # FEAT-1: 任务完成 → 扫描关联 blocker → 标记 resolved
+                    for blk in items:
+                        if blk.state_type != "blocker":
+                            continue
+                        meta = dict(getattr(blk, "metadata", {}) or {})
+                        if meta.get("blocker_status", "open") in ("resolved", "obsolete"):
+                            continue
+                        if (summary[:30] in blk.current_value
+                                or blk.current_value[:30] in summary):
+                            self.store.update_blocker_status(
+                                blk.memory_id, "resolved",
+                                {"resolved_by": "task_backflow",
+                                 "blocking_reason": summary},
+                            )
+                            updated_ids.append(blk.memory_id)
+                            updated += 1
+
+                break  # one match per task_guid is enough
+
+        if updated_ids:
+            # FEAT-1: 填充 last_diff 使 trigger R5 可检测到阻塞解除
+            all_items = self.store.list_items(
+                entries[0].get("project_id", "") if entries else "")
+            for item in all_items:
+                if item.memory_id in updated_ids:
+                    self.last_diff["updated"].append(item)
 
         return updated
 
@@ -880,6 +971,108 @@ class MemoryEngine:
                 ev["links"] = parsed.links
             out.append(ev)
         return out
+
+    @staticmethod
+    def _sanitize_items(items: list[MemoryItem]) -> list[MemoryItem]:
+        """1.3: 统一数据净化——提取后、存储前集中清洗。
+
+        处理内容：
+        - 剥离 sender 前缀（"李四：在弄了"→"在弄了"）
+        - 丢弃 @bot 命令残留
+        - 丢弃文档/任务同步噪音
+        - 裸名 owner 降级为 needs_review
+        - 丢弃无意义短阻塞文本
+        """
+        import re as _re
+        cleaned: list[MemoryItem] = []
+        for item in items:
+            # 非 message 来源（doc/task/calendar 等）→ 直接保留
+            src_type = item.source_refs[0].type if item.source_refs else "message"
+            if src_type != "message":
+                cleaned.append(item)
+                continue
+
+            # ── 剥离 sender 前缀 ──
+            sender = item.source_refs[0].sender_name if item.source_refs else ""
+            val = item.current_value or ""
+            if sender and len(sender) >= 2:
+                # "李四：李四：xxx" → "xxx"
+                dup = _re.match(r'^(.{1,10})[：:]\1[：:]\s*', val)
+                if dup:
+                    val = val[dup.end():]
+                # "李四：xxx" → "xxx"
+                elif val.startswith(sender + "：") or val.startswith(sender + ":"):
+                    val = val[len(sender) + 1:]
+            item.current_value = val.strip()
+
+            # ── 丢弃 @bot 命令 ──
+            if val.strip().startswith("@bot"):
+                continue
+
+            # ── 丢弃纯文档/任务引用（无实质协作内容）──
+            if (val.startswith("【文档】") or val.startswith("【任务】")) and len(val) < 50:
+                continue
+
+            # ── 丢弃无意义短阻塞文本 ──
+            _blocker_noise = ("阻塞清单", "风险列表", "问题列表", "待办清单")
+            if item.state_type == "blocker" and val.strip() in _blocker_noise:
+                continue
+            if item.state_type == "blocker" and len(val.strip()) < 4:
+                continue
+
+            # ── 裸名 owner → needs_review ──
+            if item.state_type == "owner":
+                owner_val = (item.owner or "").strip()
+                if val.strip() == owner_val and len(owner_val) <= 4:
+                    item.review_status = "needs_review"
+                    item.confidence = min(item.confidence, 0.40)
+
+            # ── member_status 去重 + 过滤 ──
+            if item.state_type == "member_status":
+                _core_status = ("请假", "不在", "休假", "出差", "习惯用", "擅长")
+                if len(val.strip()) >= 4:
+                    pass
+                elif any(kw in val for kw in _core_status):
+                    pass
+                else:
+                    continue
+                if any(i.state_type == "member_status"
+                       and i.current_value.strip() == val.strip()
+                       for i in cleaned):
+                    continue
+
+            # ── blocker 含收尾/庆祝词 → 丢弃（PM收尾消息不是阻塞）──
+            if item.state_type == "blocker":
+                _closing = ("感谢", "辛苦", "庆祝", "收官", "太棒", "周末愉快",
+                           "冲刺回顾", "大家加油", "做得不错")
+                if any(kw in val for kw in _closing):
+                    continue
+
+            # ── decision 含总结词但无决策词 → 丢弃 ──
+            if item.state_type == "decision":
+                _summary = ("总结", "同步一下", "汇报", "过一下", "对齐", "站会",
+                           "进度同步", "下午同步")
+                _decision = ("决定", "确认", "采用", "改为", "不再", "废弃", "定了")
+                if any(kw in val for kw in _summary) and not any(kw in val for kw in _decision):
+                    continue
+
+            # ── next_step 含生活词但无任务动词 → 丢弃 ──
+            if item.state_type == "next_step":
+                _casual = ("吃饭", "下午茶", "奶茶", "火锅", "下班", "周末",
+                          "老板请客", "聚餐", "打游戏", "请假", "休息")
+                _task_verb = ("完成", "提交", "修复", "上线", "开发", "测试",
+                            "部署", "整理", "确认", "补充", "发送", "同步")
+                if any(kw in val for kw in _casual) and not any(kw in val for kw in _task_verb):
+                    continue
+            # Prompt 语用分类（A1-A3）让 LLM 在源头不产出这些噪音；
+            # RuleOnly 产生的同类噪音量小且会被 needs_review 标记。
+
+            # ── 确认回复残留 ──
+            if val.strip() in ("确认1", "确认2", "确认3", "都不是", "驳回1", "驳回2"):
+                continue
+
+            cleaned.append(item)
+        return cleaned
 
     def _should_process_now(self, project_id: str | None) -> tuple[bool, str]:
         """Check if extraction should proceed based on debounce timing.

@@ -251,6 +251,44 @@ class LLMExtractor(BaseExtractor):
 - 文档内容不是对话，不应用代词解析规则（"我""他"等指代的是文档作者，不是消息发送者）
 - 文档内容默认置信度可略高（0.7-0.85），因为文档通常是经过整理的正式信息
 
+【消息语用分类】(提取前必须判断！A1)
+
+每条消息先归入以下三类之一，再决定是否从中提取任何协作信号：
+
+1. **信号发布** — 说话人首次提出、更新、或实质性改变某协作状态。
+   识别特征：
+   · 说话人是一线执行者（而非 PM / 组长做汇总）
+   · 内容是具体的、可操作的、有时间锚点的
+   · 消息长度适中，通常聚焦 1-2 个话题
+   · 例："后端API迁移卡住了，数据库兼容性有问题" → 可提取
+   · 例："最终决定用 PostgreSQL，迁移文档我更新" → 可提取
+   · 例："张三：请假半天，下午不在" → 可提取
+   提取要求：current_value 只包含该话题的具体内容，不包含整条消息。
+
+2. **信号引用** — 说话人在汇总、回顾、同步、或转述已有协作状态。
+   识别特征：
+   · 说话人是 PM / 组长 / 项目协调人
+   · 消息含多个话题（进度 + 阻塞 + 下一步混在一起）
+   · 含总结性表述（"进度同步""今日总结""本周回顾""冲刺收尾""同步一下"）
+   · 含 @所有人 且内容为团队全局视图
+   · 含感谢/庆祝/收尾用语
+   · 例："今日进度：API 70%，阻塞是网关权限未批，下一步联调" → 不提取
+   · 例："感谢大家10天努力，冲刺目标基本达成" → 不提取
+   提取要求：返回空的 candidates 列表。这类消息中提到的协作状态
+   是对已存在状态的引用，不是首次发布。不要在信号引用类消息中
+   寻找可提取的片段 —— 整条跳过。
+
+3. **无关消息** — 纯闲聊、确认回复、技术咨询、纯通知。→ 不提取。
+
+【多话题消息处理】(A2)
+当一条信号发布类消息包含多个独立协作话题时：
+· 每个话题单独作为一个 candidate
+· 每个 candidate 的 current_value 只包含该话题的具体内容，
+  不包含消息中其他话题的文本
+· 如果各话题之间没有独立的负责人/状态/时间信息，
+  则合并为一个 candidate
+· 信号引用类消息无论几个话题，整条不提取
+
 【禁止提取规则】(严格遵循！)
 以下情况**必须返回空的 candidates 列表**：
 1. 纯链接/图片/文件/代码片段（无协作语义）
@@ -259,6 +297,17 @@ class LLMExtractor(BaseExtractor):
 4. 纯 FYI 通知无指派/决策含义："下周二放假"
 5. 纯确认回复："好的""收到""OK""明白了""嗯嗯"
 6. 纯日常回应："稍等我看一下""我到了""我试试看"
+7. PM / 组长做的进度同步、汇总、回顾 → 整体判定为"信号引用"，不提取。
+   包括但不限于："进度同步""今日进度""本周总结""冲刺回顾""收尾"
+   "汇报一下""同步一下""过一下进度""对齐一下"。
+   即使其中提到了阻塞、决策、目标等关键词，也属于引用而非发布。(A3)
+8. 冲刺结束时的感谢/庆祝/收尾消息 → 不提取。
+   即使包含"目标""完成""达成"等词，也属于回顾而非新信号。(A3)
+9. 成员状态必须有具体状态描述（"请假""出差""不在""习惯用""擅长"），
+   仅出现人名、职位、角色而没有任何状态描述的，不提取。(A3)
+10. 消息中出现的生活化时间词（"下班前""周末前""放假前"）
+    如果同时包含明确的任务动词（"完成""提交""修复""上线"），
+    应正常提取为 next_step 或 deadline。生活词本身不改变提取判断。(A3)
 
 判断原则：去掉所有协作信号后，剩余内容不足以形成协作状态 → 返回空列表。
 
@@ -491,6 +540,22 @@ class RuleBasedExtractor(BaseExtractor):
                       "如何配置", "如何使用", "能不能帮", "可以帮", "怎么弄",
                       "啥意思", "什么意思", "是什么", "在哪里")
 
+    # V1.20: @bot 查询模式（关于项目状态的提问，非协作贡献 → 跳过提取）
+    _BOT_QUERY_PATTERNS = (
+        "@bot",
+    )
+    # 状态关键词 + 疑问词的组合（"有什么阻塞""谁在负责"等）
+    _STATE_INQUIRY_PATTERNS = (
+        ("阻塞", ("什么", "哪些", "多少", "有什么", "有哪些", "在哪", "怎么样", "如何", "还有")),
+        ("负责", ("谁", "谁在", "谁是", "还有谁")),
+        ("目标", ("什么", "是什么", "有哪些")),
+        ("决策", ("什么", "有哪些", "做了什么")),
+        ("下一步", ("是什么", "做什么", "怎么做")),
+        ("进度", ("怎么样", "如何", "")),
+        ("截止", ("是什么", "什么时候", "是哪天")),
+        ("延期", ("哪些", "有什么")),
+    )
+
     # 口语化弱信号（不精确，但有协作可能 → LLM）
     # V1.17: 精确信号（格式固定，规则可直接提取）
     _PRECISE_SIGNALS = frozenset({
@@ -547,6 +612,34 @@ class RuleBasedExtractor(BaseExtractor):
         """极简回复 → 跳过（仅白名单，不按长度）。"""
         return text.strip() in RuleBasedExtractor._TRIVIAL
 
+    @classmethod
+    def _is_bot_query(cls, event: dict, text: str) -> bool:
+        """检测是否为 @bot 查询或项目状态提问（不应提取为协作信号）。
+
+        真实场景中用户会 @bot 问"有什么阻塞""谁在负责"等——
+        这些是元问题，不是协作贡献，必须跳过提取。
+        """
+        # 1. 直接 @bot 提及
+        if "@bot" in text:
+            return True
+        # 2. 事件中有 bot 的 at_list 标记
+        at_list = event.get("at_list", []) or []
+        for at in at_list:
+            uid = (at.get("user_id", "") or at.get("open_id", "")
+                   if isinstance(at, dict) else str(at))
+            if uid and "bot" in uid.lower():
+                return True
+        # 3. 状态关键词 + 疑问词组合（"有什么阻塞""谁在负责"等）
+        for state_kw, inquiry_words in cls._STATE_INQUIRY_PATTERNS:
+            if state_kw not in text:
+                continue
+            for iw in inquiry_words:
+                if iw and iw in text:
+                    return True
+                if not iw and ("?" in text or "？" in text):
+                    return True
+        return False
+
     def extract(self, events: Iterable[dict]) -> list[MemoryItem]:
         """V1.17: Selector模式——有把握才提取，没把握加入 delegate_list。
 
@@ -568,6 +661,18 @@ class RuleBasedExtractor(BaseExtractor):
                 items.extend(self._extract_task_source(event, text))
             if str(event.get("source_type", "")) == "calendar":
                 items.extend(self._extract_calendar_source(event, text))
+
+            # FEAT-2: 文档事件有结构化 hints 时直接提取，跳过规则重解析
+            if (str(event.get("source_type", "")) == "doc"
+                    and event.get("extraction_hints")):
+                hint_items = self._extract_from_hints(event)
+                if hint_items:
+                    items.extend(hint_items)
+                    continue
+
+            # V1.20: @bot 查询 / 项目状态提问 → 跳过提取（不是协作贡献）
+            if self._is_bot_query(event, text):
+                continue
 
             # V1.19 selector mode: 规则先提取，仅对真正不确定的场景 delegate LLM
             if self.selector_mode:
@@ -639,6 +744,63 @@ class RuleBasedExtractor(BaseExtractor):
         value = event.get("text") or event.get("content") or event.get("excerpt") or ""
         return str(value).strip()
 
+    def _extract_from_hints(self, event: dict) -> list[MemoryItem]:
+        """FEAT-2: Extract MemoryItems from structured extraction_hints.
+
+        When _chunk_doc_markdown() detects structured signals (owner name,
+        deadline date) in document tables/list items, this method converts
+        them directly to MemoryItems, skipping the text re-parse step.
+        Falls back to empty list if hints are missing or ambiguous.
+
+        Args:
+            event: Doc event dict with optional extraction_hints.
+
+        Returns:
+            List of MemoryItems (0 or more) extracted from hints.
+        """
+        hints = event.get("extraction_hints", {}) or {}
+        if not isinstance(hints, dict) or not hints:
+            return []
+
+        detected_type = str(hints.get("detected_type", ""))
+        detected_owner = str(hints.get("detected_owner", ""))
+        if not detected_type:
+            return []
+
+        items: list[MemoryItem] = []
+        text = self._event_text(event)
+        confidence = 0.80  # hints come from structured doc parsing
+
+        if detected_type == "owner" and detected_owner:
+            if self._is_valid_person_name(detected_owner):
+                items.append(MemoryItem(
+                    project_id=str(event.get("project_id", "default")),
+                    state_type="owner",
+                    key=f"owner_{detected_owner}",
+                    current_value=f"{detected_owner}负责：{text[:200]}",
+                    rationale=f"文档表格/列表项中显式标注的负责人",
+                    owner=detected_owner,
+                    status="active",
+                    confidence=confidence,
+                    source_refs=[source_ref_from_event(event, text[:120])],
+                ))
+
+        if detected_type == "deadline":
+            ddl_val = str(hints.get("extraction_hint", ""))
+            ddl_val = ddl_val.replace("deadline=", "") if ddl_val.startswith("deadline=") else ddl_val
+            items.append(MemoryItem(
+                project_id=str(event.get("project_id", "default")),
+                state_type="deadline",
+                key=f"deadline_{text[:30]}",
+                current_value=text[:200],
+                rationale=f"文档表格/列表项中显式标注的截止日期：{ddl_val[:60]}",
+                status="active",
+                confidence=confidence,
+                source_refs=[source_ref_from_event(event, text[:120])],
+            ))
+
+        return items
+
     def _base_item(
         self,
         event: dict,
@@ -664,20 +826,28 @@ class RuleBasedExtractor(BaseExtractor):
         )
 
     def _extract_goal(self, event: dict, text: str) -> list[MemoryItem]:
-        """Extract the current project goal when a message states one."""
+        """Extract the current project goal when a message states one.
+
+        1.2: 回顾/疑问/总结性表述 → needs_review（标记但不丢弃）。
+        只对明确的目标设定陈述给高置信度。
+        """
         if not any(word in text.lower() for word in ("目标", "goal", "要做的是")):
             return []
-        return [
-            self._base_item(
-                event,
-                text,
-                "project_goal",
-                "current_goal",
-                text,
-                "Message appears to define or restate the current project goal.",
-                0.65,
-            )
-        ]
+        # 1.2: 回顾/疑问 → 低置信度 + 待审核
+        retro_kw = ("达成", "完成了", "做完了", "收尾", "回顾", "搞完了",
+                    "差不多了", "基本达成", "已经完成", "已达成", "实现了")
+        question_kw = ("什么", "吗", "呢", "？", "?", "怎么", "如何")
+        is_retro = any(kw in text for kw in retro_kw)
+        is_question = any(kw in text for kw in question_kw) and len(text) < 50
+        confidence = 0.35 if (is_retro or is_question) else 0.65
+        item = self._base_item(
+            event, text, "project_goal", "current_goal", text,
+            "Message appears to define or restate the current project goal.",
+            confidence,
+        )
+        if is_retro or is_question:
+            item.review_status = "needs_review"
+        return [item]
 
     def _extract_owner(self, event: dict, text: str) -> list[MemoryItem]:
         """Extract current owner or responsible person statements.
@@ -850,12 +1020,20 @@ class RuleBasedExtractor(BaseExtractor):
         if not self._is_valid_person_name(owner):
             return None
         owner = self._normalise_person_name(owner)
+        # F2: 有职责描述 → 结构化展示；无描述 → 用原文上下文（避免"张三: 张三"）
         if domain:
+            current_value = f"{owner}负责{domain}"
             key = f"owner_{domain}"
         else:
+            # 取原文中的人名+上下文片段
+            idx = text.find(owner)
+            ctx = text[max(0, idx-5):idx+len(owner)+30].strip()
+            if ctx.strip() == owner:
+                return None  # 纯裸名，无上下文，跳过
+            current_value = ctx[:120]
             key = self._hash_key(f"owner_{owner}_{text[:40]}")[:16]
         return self._base_item(
-            event, text, "owner", key, owner,
+            event, text, "owner", key, current_value,
             "Message assigns or updates project responsibility.",
             0.7, owner=owner,
         )
@@ -887,8 +1065,11 @@ class RuleBasedExtractor(BaseExtractor):
             confidence,
         )
         item.decision_strength = strength
-        if strength != "confirmed":
+        # 1.2: 试探词 → needs_review
+        _tentative = ("可能", "或许", "要不", "考虑考虑", "再说", "先看看")
+        if strength != "confirmed" or any(kw in text for kw in _tentative):
             item.review_status = "needs_review"
+            item.confidence = min(item.confidence, 0.45)
         return [item]
 
     @staticmethod
@@ -956,10 +1137,20 @@ class RuleBasedExtractor(BaseExtractor):
             return []
         if any(s in text for s in self._BLOCKER_RESOLVE_SIGNALS):
             return []  # 阻塞已解除的消息不提取为新阻塞
+        # F3: 过滤列表标题（纯标题无实质内容）
+        _blocker_noise = ("阻塞清单", "风险列表", "问题列表", "待办清单",
+                         "阻塞项", "风险项", "阻塞汇总", "风险汇总")
+        if text.strip() in _blocker_noise:
+            return []
+        # 1.2: 短文本（<8字符）→ 低置信度 + 待审核，不丢弃
+        is_short = len(text.strip()) < 8
+        confidence = 0.40 if is_short else 0.70
         item = self._base_item(
             event, text, "blocker", self._hash_key(text), text,
-            "Message identifies a blocker, risk, or dependency.", 0.7,
+            "Message identifies a blocker, risk, or dependency.", confidence,
         )
+        if is_short:
+            item.review_status = "needs_review"
         sender_name = ""
         sender = event.get("sender", {}) or {}
         if isinstance(sender, dict):
@@ -1148,12 +1339,13 @@ class RuleBasedExtractor(BaseExtractor):
     def _extract_next_step(self, event: dict, text: str) -> list[MemoryItem]:
         """Extract next-step or task-like statements from a message.
 
-        V1.15: Extracts action subject as owner (e.g. '李四需要做X' → owner='李四').
+        V1.15: Extracts action subject as owner.
+        2.1: 保留原有关键词，由 Hybrid._has_suspicious_rule_items() 过滤误判。
         """
         lowered = text.lower()
         if not any(word in lowered for word in (
             "下一步", "待办", "todo", "需要", "请", "next",
-            "补充", "补完", "重提", "确认", "通知", "先按", "先接",
+            "今天做", "明天做", "准备做", "开始做", "先做",
         )):
             return []
 
@@ -1242,6 +1434,9 @@ class RuleBasedExtractor(BaseExtractor):
                    for kw in self._MEMBER_STATUS_KEYWORDS):
             return []
         value = self._trim_member_status_value(text)
+        # 2.1: 过滤裸名/无实质内容（如"王五""没事""好的"）
+        if len(value.strip()) < 2 or value.strip() in ("没事", "好的", "收到", "OK", "行"):
+            return []
         return [
             self._base_item(
                 event,
@@ -1456,10 +1651,24 @@ class HybridExtractor(BaseExtractor):
         rule_items = self.rule.extract(event_list)
         delegate_list = getattr(self.rule, "_delegate_list", [])
 
-        # Step 2: delegate_list 中的消息交给 LLM 处理
+        # Step 2: delegate_list + 可疑事件 → LLM 校验
         llm_items = []
-        if self.llm is not None and delegate_list:
-            llm_items = self._safe_llm_extract(delegate_list)
+        suspicious_ids: set[str] = set()
+        if self.llm is not None:
+            suspicious_ids = self._get_suspicious_message_ids(rule_items)
+            # 构建 LLM 批次：delegate事件 + 可疑事件（去重）
+            llm_batch_ids = {ev.get("message_id", "") for ev in (delegate_list or [])}
+            llm_batch_ids |= suspicious_ids
+            if llm_batch_ids:
+                llm_batch = [ev for ev in event_list
+                            if ev.get("message_id", "") in llm_batch_ids]
+                if llm_batch:
+                    llm_items = self._safe_llm_extract(llm_batch)
+            # 2.2: 用 LLM 结果替换可疑事件对应的 RuleOnly 条目
+            if suspicious_ids:
+                rule_items = [i for i in rule_items
+                             if not (i.source_refs
+                                     and i.source_refs[0].message_id in suspicious_ids)]
             # LLM 空返回时回退：用规则重新提取 delegate 项
             if not llm_items and delegate_list:
                 saved_mode = getattr(self.rule, "selector_mode", False)
@@ -1493,6 +1702,38 @@ class HybridExtractor(BaseExtractor):
             )
 
         return merged
+
+    def _get_suspicious_message_ids(self, rule_items: list[MemoryItem]) -> set[str]:
+        """2.2: 返回可疑条目的 source message_id 集合。
+
+        可疑信号：
+        - blocker 文本 > 120 字（可能是 PM 汇报）
+        - member_status 是裸名（≤4 字）
+        - next_step 含生活/请假关键词
+        - decision 含总结/提醒类用语
+        """
+        ids: set[str] = set()
+        if not rule_items:
+            return ids
+        for item in rule_items:
+            val = item.current_value or ""
+            suspicious = False
+            if item.state_type == "blocker" and len(val) > 120:
+                suspicious = True
+            elif item.state_type == "member_status" and len(val.strip()) < 5:
+                suspicious = True
+            elif item.state_type == "next_step":
+                _casual = ("吃饭", "下午茶", "请假", "休息", "周末", "老板请客",
+                          "奶茶", "火锅", "下班", "打游戏")
+                if any(kw in val for kw in _casual):
+                    suspicious = True
+            elif item.state_type == "decision":
+                _summary = ("总结", "同步一下", "汇报", "过一下", "对齐", "站会")
+                if any(kw in val for kw in _summary):
+                    suspicious = True
+            if suspicious and item.source_refs:
+                ids.add(item.source_refs[0].message_id)
+        return ids
 
     def _needs_llm(self, rule_items: list[MemoryItem], events: list[dict]) -> bool:
         """判断是否需要用 LLM 补充提取。

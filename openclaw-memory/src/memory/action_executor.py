@@ -81,6 +81,7 @@ class ActionExecutor:
             "send_message": self._execute_send_message,
             "create_doc": self._execute_create_doc,
             "assign_task": self._execute_assign_task,
+            "send_alert": self._execute_send_alert,
         }
         handler = dispatch.get(action.action_type)
         if handler is None:
@@ -124,9 +125,11 @@ class ActionExecutor:
         )
 
         task_guid = ""
+        task_url = ""
         if result.data:
             inner = result.data.get("data", result.data)
             task_guid = str(inner.get("guid", "") or inner.get("task_guid", ""))
+            task_url = str(inner.get("url", "") or inner.get("task_url", ""))
 
         # V1.15: 持久化 task_guid → summary 映射用于回流
         if task_guid:
@@ -146,7 +149,7 @@ class ActionExecutor:
             action=action,
             success=result.returncode == 0,
             cli_result=result,
-            output_data={"task_guid": task_guid, "summary": summary},
+            output_data={"task_guid": task_guid, "task_url": task_url, "summary": summary},
         )
 
     def _execute_send_message(
@@ -175,16 +178,31 @@ class ActionExecutor:
             content = content.replace(name, at_tag, 1) if at_tag in content else content
 
         content = content[:2000]
-        msg_type = str(ctx.get("msg_type", "text"))
 
-        result = self.adapter.send_message(
-            chat_id=chat_id, content=content, msg_type=msg_type,
-        )
-
-        # V1.18: R4确认提问 → 记录msg_id用于后续reply/reaction检测
+        # FEAT-7: R4确认提问 → 发送交互式卡片替代纯文本
         is_confirm = action.metadata.get("is_confirmation_question", False)
         if is_confirm:
+            from memory.card_renderer import render_confirmation_card
             from memory.reply_handler import record_question
+            import json as _json
+            owner = action.metadata.get("candidate_owner", action.target_owner)
+            time_hint = ""
+            identity_key = (
+                action.metadata.get("candidate_identity_keys", [None])[0]
+                or action.idempotency_key
+            )
+            candidate_count = action.metadata.get("candidate_count", 1)
+            card = render_confirmation_card(
+                owner=owner,
+                item_text=content,
+                time_hint=time_hint,
+                identity_key=identity_key,
+                candidate_count=candidate_count,
+            )
+            card_json = _json.dumps(card, ensure_ascii=False)
+            result = self.adapter.send_message(
+                chat_id=chat_id, content=card_json, msg_type="interactive",
+            )
             msg_id = ""
             if result.data:
                 inner = result.data.get("data", result.data)
@@ -195,6 +213,17 @@ class ActionExecutor:
                 record_question(msg_id, [str(candidates)],
                                 ctx.get("project_id", ""),
                                 candidate_identity_keys=candidate_keys)
+            return ExecutionResult(
+                action=action,
+                success=result.returncode == 0,
+                cli_result=result,
+                output_data={"message_id": msg_id},
+            )
+
+        msg_type = str(ctx.get("msg_type", "text"))
+        result = self.adapter.send_message(
+            chat_id=chat_id, content=content, msg_type=msg_type,
+        )
 
         msg_id = ""
         if result.data and not is_confirm:
@@ -207,6 +236,19 @@ class ActionExecutor:
             cli_result=result,
             output_data={"message_id": msg_id},
         )
+
+    def _execute_send_alert(
+        self, action: PlannedAction, ctx: dict[str, Any],
+    ) -> ExecutionResult:
+        """Send an alert/notification to the group chat.
+
+        FEAT-4a: Delegates to _execute_send_message since send_alert is
+        semantically identical to a group notification — the distinct
+        action_type exists for audit trail and trigger-rule provenance.
+        Previously send_alert was missing from the dispatch dict, causing
+        R2/R3/R4/R5 proposals to be silently dropped.
+        """
+        return self._execute_send_message(action, ctx)
 
     def _execute_create_doc(
         self, action: PlannedAction, ctx: dict[str, Any],

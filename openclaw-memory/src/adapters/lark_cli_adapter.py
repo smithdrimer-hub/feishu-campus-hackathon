@@ -331,8 +331,8 @@ class LarkCliAdapter:
             identity: "bot" (default) or "user".
         """
         args = [
-            "task", "+assign", "--task-guid", task_guid,
-            "--assignee-ids", ",".join(assignee_ids),
+            "task", "+assign", "--task-id", task_guid,
+            "--add", ",".join(assignee_ids),
             "--as", identity, "--format", "json",
         ]
         return self.run(args, allow_write=True)
