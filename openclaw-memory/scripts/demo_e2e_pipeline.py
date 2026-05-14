@@ -160,6 +160,9 @@ def main() -> None:
     pages = 0
     max_pages = max(args.limit // 50, 1)
 
+    last_sync = _load_last_sync_state(store)
+    last_sync_msg_id = last_sync.get("last_message_id", "")
+
     while pages < max_pages:
         result = adapter.list_chat_messages(
             args.chat_id, page_size=50, page_token=page_token,
@@ -169,6 +172,22 @@ def main() -> None:
         page_msgs = _extract_message_list(result.data)
         if not page_msgs:
             break
+
+        # V1.19 增量同步：本页 >80% 消息已处理 → 停止翻页
+        if last_sync_msg_id and pages == 0:
+            already_known = sum(
+                1 for m in page_msgs
+                if m.get("message_id", "") not in ("", last_sync_msg_id)
+                and _is_collaboration_message(m)
+                and _normalize_event(m, args.chat_id, args.project_id).get("message_id", "")
+                in processed_ids
+            )
+            if len(page_msgs) > 0 and already_known / len(page_msgs) > 0.8:
+                all_messages.extend(page_msgs)
+                pages += 1
+                print(f"    增量同步：本页 {already_known}/{len(page_msgs)} 条已处理，停止翻页")
+                break
+
         all_messages.extend(page_msgs)
         pages += 1
         # 检查是否有更多页
@@ -192,6 +211,15 @@ def main() -> None:
     written = store.append_raw_events(events)
     print(f"    共 {len(all_messages)} 条消息 ({pages} 页), "
           f"新写入 {written} 条\n")
+
+    # V1.19 增量同步记录
+    if all_messages:
+        latest = all_messages[0]
+        _save_last_sync_state(store, latest.get("message_id", ""),
+                              latest.get("create_time", ""),
+                              len(all_messages), written)
+
+    # ── Step 2: 提取记忆 ───────────────────────────────────────
 
     # ── Step 2: 提取记忆 ───────────────────────────────────────
     print("[2/5] 提取结构化记忆...")
@@ -465,6 +493,31 @@ def main() -> None:
 
 # ── Message helpers ────────────────────────────────────────────────
 
+def _load_last_sync_state(store) -> dict:
+    """V1.19: 加载上次同步状态。"""
+    import json
+    path = Path(store.data_dir) / "last_sync.json"
+    if path.exists():
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {}
+
+
+def _save_last_sync_state(store, last_message_id: str, last_sync_time: str,
+                           total_pulled: int, new_written: int) -> None:
+    """V1.19: 保存同步状态，供增量同步使用。"""
+    import json
+    path = Path(store.data_dir) / "last_sync.json"
+    path.write_text(json.dumps({
+        "last_message_id": last_message_id,
+        "last_sync_time": last_sync_time,
+        "total_pulled": total_pulled,
+        "new_written": new_written,
+    }, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def _extract_message_list(payload: Any) -> list[dict[str, Any]]:
     """Return the message list from a lark-cli JSON payload."""
     if not isinstance(payload, dict):
@@ -502,6 +555,14 @@ def _normalize_event(msg: dict, chat_id: str, project_id: str) -> dict[str, Any]
     msg_type = str(msg.get("msg_type", "text"))
     sender = msg.get("sender", {}) or {}
     sender_name = str(sender.get("name", sender.get("id", "")))
+
+    # V1.19 Demo: 从"张三：xxx"前缀提取模拟发送人
+    # 演示群所有消息由同一用户发送，用内容前缀区分角色
+    if isinstance(raw_content, str):
+        import re
+        prefix_match = re.match(r'^([一-鿿A-Za-z0-9_]{1,6})[：:]', raw_content.strip())
+        if prefix_match:
+            sender_name = prefix_match.group(1)
 
     from memory.message_parser import get_parser
     parsed = get_parser().parse_content(str(raw_content), msg_type, sender_name)

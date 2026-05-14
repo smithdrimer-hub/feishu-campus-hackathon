@@ -39,6 +39,8 @@ READ_ONLY_COMMANDS: tuple[CommandSpec, ...] = (
     CommandSpec(("task", "+search"), CommandKind.READ_ONLY, "Search tasks"),
     CommandSpec(("task", "+tasklist-search"), CommandKind.READ_ONLY, "Search tasklists"),
     CommandSpec(("task", "tasklists", "tasks"), CommandKind.READ_ONLY, "List tasklist tasks"),
+    CommandSpec(("im", "+resource"), CommandKind.READ_ONLY, "Download message resource"),
+    CommandSpec(("calendar", "event.attendees", "list"), CommandKind.READ_ONLY, "List event attendees"),
 )
 
 WRITE_COMMANDS: tuple[CommandSpec, ...] = (

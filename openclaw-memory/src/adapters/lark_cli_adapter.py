@@ -206,7 +206,7 @@ class LarkCliAdapter:
                  "--markdown", content],
                 allow_write=True,
             )
-        # V1.18: 交互式卡片——1.0.24 subprocess 无长度限制
+        # V1.18: 交互式卡片——内联 JSON（Windows 命令行列参限制 ~500 字符）
         if msg_type == "interactive":
             return self.run(
                 ["im", "+messages-send", "--as", identity, "--chat-id", chat_id,

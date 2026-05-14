@@ -160,7 +160,7 @@ def source_ref_from_event(event: dict[str, Any], excerpt: str | None = None) -> 
     sender = event.get("sender", {}) or {}
 
     # 构建来源链接
-    source_url = str(event.get("source_url", ""))  # V1.17: 优先使用 event 中已有的 URL
+    source_url = str(event.get("source_url", ""))
     if not source_url:
         source_type = str(event.get("source_type", "message"))
         if source_type == "doc":
@@ -170,8 +170,8 @@ def source_ref_from_event(event: dict[str, Any], excerpt: str | None = None) -> 
                 if len(parts) > 1:
                     doc_token = parts[1].rsplit("_", 1)[0]
                     source_url = f"https://www.feishu.cn/docx/{doc_token}"
-        elif chat_id and message_id:
-            source_url = f"https://app.feishu.cn/client/messages/{chat_id}/{message_id}"
+        # 消息深链：飞书 API 不支持单条消息的固定链接
+        # 证据追溯使用 sender_name + created_at + excerpt 文本方式
 
     return SourceRef(
         type=str(event.get("source_type", "message")),
